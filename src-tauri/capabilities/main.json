@@ -4,7 +4,7 @@
   "description": "The Sulfur main page may control its own window and dialogs. Extension frames receive no Tauri permissions.",
   "windows": ["main"],
   "remote": {
-    "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*", "http://[::1]:*/*"]
+    "urls": ["http://127.0.0.1:*/*", "http://localhost:*/*"]
   },
   "permissions": [
     "core:default",

@@ -97,13 +97,11 @@ fn open_window(app: &tauri::AppHandle, origin: &str) -> Result<(), Box<dyn std::
         return Ok(());
     }
     let origin_url: tauri::Url = origin.parse()?;
+    // only the hosts capabilities/main.json grants: a capability URL pattern can't name [::1]
     if origin_url.scheme() != "http"
-        || !matches!(
-            origin_url.host_str(),
-            Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
-        )
+        || !matches!(origin_url.host_str(), Some("127.0.0.1" | "localhost"))
     {
-        return Err("The service must use loopback HTTP".into());
+        return Err("The service must use loopback HTTP on 127.0.0.1 or localhost".into());
     }
     let allowed = origin_url.origin().ascii_serialization();
     let script = include_str!("bridge.js").replace("http://127.0.0.1:47615", &allowed);
@@ -220,7 +218,10 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if READY.load(Ordering::Acquire) {
                     api.prevent_close();
-                    let _ = window.eval("window.dispatchEvent(new Event('sulfur-close'))");
+                    // scripts run in the window's webview, not the window
+                    if let Some(webview) = window.get_webview_window(window.label()) {
+                        let _ = webview.eval("window.dispatchEvent(new Event('sulfur-close'))");
+                    }
                 }
             }
         })
