@@ -3,9 +3,13 @@ import path from 'node:path';
 const version = process.argv[2] || process.env.VERSION;
 if (!/^\d+\.\d+\.\d+$/.test(version || '')) throw new Error('Pass a three-part release version');
 const publicKey = process.env.SULFUR_UPDATE_PUBKEY?.trim();
-if (!publicKey || !process.env.TAURI_SIGNING_PRIVATE_KEY)
+const missing = [
+  !publicKey && 'UPDATE_PUBKEY',
+  !process.env.TAURI_SIGNING_PRIVATE_KEY?.trim() && 'UPDATE_SIGNING_KEY',
+].filter(Boolean);
+if (missing.length)
   throw new Error(
-    'Release signing requires the Sulfur update key pair (free: bun tauri signer generate)',
+    `Release signing requires the Sulfur update key pair (free: bun tauri signer generate); empty: ${missing.join(', ')}`,
   );
 const keyBytes = Buffer.from(publicKey, 'base64');
 const normalizedKey = publicKey.startsWith('untrusted comment:')

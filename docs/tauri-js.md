@@ -144,8 +144,8 @@ The manual-only release workflow runs on five native targets. Pushing this branc
 does not build an app or publish a release. Its version is `1.0.<commit count>` of
 the dispatched commit, so a rerun of one commit releases the same version.
 
-Update signing is required and free: secret `UPDATE_SIGNING_KEY` and variable
-`UPDATE_PUBKEY` are a minisign pair, such as the private key and `.pub` file from
+Update signing is required and free: secret `UPDATE_SIGNING_KEY` and variable (or
+secret) `UPDATE_PUBKEY` are a minisign pair, such as the private key and `.pub` file from
 `bun tauri signer generate -w ~/.tauri/sulfur.key`; set `UPDATE_SIGNING_PASSWORD`
 when the key has one. **Keep the public key once published**, since installed apps
 trust only it. Both old public-key input formats are normalized for Tauri.

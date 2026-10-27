@@ -39,7 +39,8 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       SULFUR_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/update
-      SULFUR_UPDATE_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
+      # public, but saved as a secret just as well
+      SULFUR_UPDATE_PUBKEY: ${{ vars.UPDATE_PUBKEY || secrets.UPDATE_PUBKEY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.UPDATE_SIGNING_PASSWORD }}
       AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
