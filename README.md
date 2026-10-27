@@ -2,21 +2,20 @@
 
 <h2 align="center">Sulfur</h2>
 
-<p align="center"><b>A code editor that lives on every machine at once.</b></p>
+<p align="center"><b>A code editor for distributed systems</b></p>
 
-Open any file on any machine and edit it live, together. Build with each machine's own
-compilers. Run it as its own desktop app or in the browser, on a mesh or fully offline.
+Enables collaborative file work across mesh-connected devices. Build with each machine's own
+compilers. Runs as its own desktop app or in the browser, on a mesh or fully offline.
 
 - **Feels like VS Code**: palette, completion, extensions from Open VSX, themes
 - **Live collaboration** on every file
-- **Language servers** for ten languages, installed per machine
-- **Builds, runs, git and SQLite** on whichever machine the project lives on
+- **Language servers** native support for ten languages
+- **Builds, runs, git and SQLite** on any host machine
 - **Self-updating** apps for macOS and Windows; a .deb for Linux
 
 ## Meshes
 
-Sulfur always works on this computer, with no mesh at all. Link a mesh and its machines join
-this one.
+Sulfur, while working as a fully offline IDE, can link a mesh and have its machines appear in the editor for remote work.
 
 - **[Phosphorus](https://github.com/pmghartman/phosphorus)** gives everything: every host's
   files and the merged home, live sessions, terminals, toolchains and language servers, plus its
@@ -25,22 +24,8 @@ this one.
 - **Overlay networks** (Tailscale, Headscale, NetBird, ZeroTier, Nebula) are next: their peers
   as machines, reached over SSH.
 
-[`docs/mesh-protocol.md`](docs/mesh-protocol.md) covers the boundary in full: what a mesh gives,
-what Sulfur brings itself (`hostkit`), and how a new kind of mesh is added.
+[`docs/mesh-protocol.md`](docs/mesh-protocol.md) covers how meshes of different kinds are added and supported by Sulfur.
 
-## Layout
-
-```
-cmd/sulfur/     the desktop app: its server for this computer, its window, its updates,
-                and the linked mesh (mesh.go)
-hostkit/        Sulfur's work on a host, for any mesh's hosts: toolchains, language servers,
-                builds and runs, git, SQLite, Open VSX (public: Phosphorus imports it)
-internal/       this computer's files, live sessions, sockets, themes and the page's build
-web/            the page: src/sulfur/ the editor, src/host/contract.js its boundary with
-                whatever hosts it, tests/ its tests
-packaging/      installers for every OS
-docs/           the editor, extensions, language servers, meshes
-```
 
 ## Building
 
