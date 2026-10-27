@@ -59,7 +59,7 @@ jobs:
           bun-version: 1.4.4
       - name: native prerequisites
         if: startsWith(matrix.runner, 'ubuntu')
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2t64
       - name: Rust
         run: rustup update stable && rustup default stable
       - run: bun install --frozen-lockfile --ignore-scripts
@@ -85,8 +85,12 @@ jobs:
         run: bun scripts/release-version.js
       - name: license notices
         run: bun run licenses
+      # verbose so a failing bundler tool (linuxdeploy, signtool) shows its own output; the
+      # AppImage tools unpack themselves rather than mount through FUSE
       - name: native app and signed updater
-        run: bun run build --config src-tauri/tauri.release.conf.json
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: bun run build --verbose --config src-tauri/tauri.release.conf.json
       - name: collect packages and legacy-compatible feeds
         run: bun scripts/release-artifacts.js
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

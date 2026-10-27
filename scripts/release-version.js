@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 const version = process.argv[2] || process.env.VERSION;
@@ -37,10 +38,12 @@ const release = {
   bundle: { createUpdaterArtifacts: true },
   plugins: { updater: { pubkey: normalizedKey } },
 };
+// Git's bash by path: a bare `bash` finds System32's WSL launcher first
+const gitBash = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe');
 if (process.platform === 'win32')
   release.bundle.windows = {
     signCommand: {
-      cmd: 'bash',
+      cmd: existsSync(gitBash) ? gitBash : Bun.which('bash') || 'bash',
       args: [path.resolve('packaging/winsign.sh').replaceAll('\\', '/'), '%1'],
     },
   };
