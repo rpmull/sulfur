@@ -1,4 +1,4 @@
-// What enabled converted VS Code extensions declare (internal/sulfur/vsx_convert.go writes
+// What enabled converted VS Code extensions declare (hostkit/vsx_convert.go writes
 // them): their languages and grammars for the editor, snippets for completion, color and
 // file icon themes. The workbench puts each extension's files in when it's enabled and
 // takes them out when it's not; the editor and its completion only ask.

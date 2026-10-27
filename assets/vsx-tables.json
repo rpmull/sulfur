@@ -1,0 +1,624 @@
+{
+  "vsxUnsupported": {
+    "commands": "commands run the extension's code",
+    "menus": "menus run the extension's commands",
+    "submenus": "menus run the extension's commands",
+    "views": "views are drawn by the extension's code",
+    "viewsContainers": "views are drawn by the extension's code",
+    "viewsWelcome": "views are drawn by the extension's code",
+    "customEditors": "custom editors are webviews the extension's code draws",
+    "webviews": "webviews are the extension's code",
+    "debuggers": "Sulfur has no debug adapter host",
+    "breakpoints": "Sulfur has no debug adapter host",
+    "taskDefinitions": "tasks are provided by the extension's code; Sulfur's tasks live in .sulfur/build.json",
+    "problemMatchers": "Sulfur reads build problems itself",
+    "problemPatterns": "Sulfur reads build problems itself",
+    "jsonValidation": "JSON schemas need a JSON language server",
+    "walkthroughs": "walkthroughs are VS Code's getting-started pages",
+    "notebooks": "Sulfur has no notebooks",
+    "notebookRenderer": "Sulfur has no notebooks",
+    "terminal": "terminal profiles are the extension's code",
+    "authentication": "authentication providers are the extension's code",
+    "colors": "theme colors for the extension's own UI",
+    "semanticTokenTypes": "semantic token types come from language servers Sulfur colors itself",
+    "semanticTokenModifiers": "semantic token types come from language servers Sulfur colors itself",
+    "semanticTokenScopes": "semantic token types come from language servers Sulfur colors itself",
+    "icons": "product icons: Sulfur draws its own",
+    "productIconThemes": "product icons: Sulfur draws its own",
+    "localizations": "display language packs translate VS Code's own UI",
+    "resourceLabelFormatters": "remote file systems are the extension's code",
+    "typescriptServerPlugins": "plugins for VS Code's built-in TypeScript service",
+    "html": "custom data for VS Code's built-in HTML service",
+    "css": "custom data for VS Code's built-in CSS service",
+    "codeActions": "code actions come from the extension's code",
+    "documentation": "documentation for the extension's code actions",
+    "chatParticipants": "chat participants are the extension's code",
+    "languageModelTools": "language model tools are the extension's code",
+    "mcpServerDefinitionProviders": "MCP servers are started by the extension's code",
+    "continueEditSession": "VS Code's edit sessions",
+    "remoteHelp": "VS Code's remote development",
+    "statusBarItems": "status bar items run the extension's commands"
+  },
+  "mimeOf": {
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf"
+  },
+  "vscodeLanguages": {
+    "bat": [
+      "bat cmd",
+      ""
+    ],
+    "c": [
+      "c i",
+      ""
+    ],
+    "clojure": [
+      "clj cljs cljc cljx clojure edn",
+      ""
+    ],
+    "coffeescript": [
+      "coffee cson iced",
+      ""
+    ],
+    "cpp": [
+      "cpp cppm cc ccm cxx cxxm c++ hpp hh hxx h++ h ii ino inl ipp ixx tpp txx",
+      ""
+    ],
+    "csharp": [
+      "cs csx cake",
+      ""
+    ],
+    "css": [
+      "css",
+      ""
+    ],
+    "cuda-cpp": [
+      "cu cuh",
+      ""
+    ],
+    "dart": [
+      "dart",
+      ""
+    ],
+    "diff": [
+      "diff patch rej",
+      ""
+    ],
+    "dockerfile": [
+      "dockerfile containerfile",
+      "dockerfile containerfile"
+    ],
+    "elixir": [
+      "ex exs",
+      ""
+    ],
+    "erlang": [
+      "erl hrl",
+      ""
+    ],
+    "fsharp": [
+      "fs fsi fsx fsscript",
+      ""
+    ],
+    "go": [
+      "go",
+      ""
+    ],
+    "graphql": [
+      "graphql gql",
+      ""
+    ],
+    "groovy": [
+      "groovy gvy gradle jenkinsfile nf",
+      "jenkinsfile"
+    ],
+    "handlebars": [
+      "handlebars hbs hjs",
+      ""
+    ],
+    "haskell": [
+      "hs lhs",
+      ""
+    ],
+    "hlsl": [
+      "hlsl hlsli fx fxh vsh psh cginc compute",
+      ""
+    ],
+    "html": [
+      "html htm shtml xhtml xht mdoc jsp asp aspx jshtm volt ejs rhtml",
+      ""
+    ],
+    "ini": [
+      "ini",
+      ""
+    ],
+    "java": [
+      "java jav",
+      ""
+    ],
+    "javascript": [
+      "js es6 mjs cjs pac",
+      "jakefile"
+    ],
+    "javascriptreact": [
+      "jsx",
+      ""
+    ],
+    "json": [
+      "json bowerrc jscsrc webmanifest js.map css.map ts.map har jslintrc jsonld geojson ipynb vuerc",
+      "composer.lock .watchmanconfig"
+    ],
+    "jsonc": [
+      "jsonc eslintrc eslintrc.json jsfmtrc jshintrc swcrc hintrc babelrc code-workspace",
+      "tsconfig.json jsconfig.json .devcontainer.json devcontainer.json"
+    ],
+    "julia": [
+      "jl",
+      ""
+    ],
+    "kotlin": [
+      "kt kts",
+      ""
+    ],
+    "latex": [
+      "tex ltx ctx",
+      ""
+    ],
+    "bibtex": [
+      "bib",
+      ""
+    ],
+    "less": [
+      "less",
+      ""
+    ],
+    "lua": [
+      "lua",
+      ""
+    ],
+    "makefile": [
+      "mak mk",
+      "makefile gnumakefile ocamlmakefile"
+    ],
+    "markdown": [
+      "md mkd mdwn mdown markdown markdn mdtxt mdtext workbook",
+      ""
+    ],
+    "nim": [
+      "nim nims nimble",
+      ""
+    ],
+    "nix": [
+      "nix",
+      ""
+    ],
+    "objective-c": [
+      "m",
+      ""
+    ],
+    "objective-cpp": [
+      "mm",
+      ""
+    ],
+    "ocaml": [
+      "ml mli",
+      ""
+    ],
+    "perl": [
+      "pl pm pod t psgi",
+      ""
+    ],
+    "php": [
+      "php php4 php5 phtml ctp",
+      ""
+    ],
+    "plaintext": [
+      "txt",
+      ""
+    ],
+    "powershell": [
+      "ps1 psm1 psd1 pssc psrc",
+      ""
+    ],
+    "prisma": [
+      "prisma",
+      ""
+    ],
+    "properties": [
+      "properties cfg conf directory gitattributes gitconfig gitmodules editorconfig repo",
+      ""
+    ],
+    "proto": [
+      "proto",
+      ""
+    ],
+    "python": [
+      "py rpy pyw cpy gyp gypi pyi ipy pyt",
+      "snakefile sconstruct sconscript"
+    ],
+    "r": [
+      "r rhistory rprofile rt",
+      ""
+    ],
+    "razor": [
+      "cshtml razor",
+      ""
+    ],
+    "restructuredtext": [
+      "rst",
+      ""
+    ],
+    "ruby": [
+      "rb rbx rjs gemspec rake ru erb podspec rbi",
+      "rakefile gemfile guardfile podfile capfile cheffile hobofile vagrantfile appraisals rantfile berksfile berksfile.lock thorfile puppetfile dangerfile brewfile fastfile appfile deliverfile matchfile scanfile snapfile gymfile"
+    ],
+    "rust": [
+      "rs",
+      ""
+    ],
+    "scala": [
+      "scala sc sbt",
+      ""
+    ],
+    "scss": [
+      "scss",
+      ""
+    ],
+    "shaderlab": [
+      "shader",
+      ""
+    ],
+    "shellscript": [
+      "sh bash bashrc bash_aliases bash_profile bash_login ebuild profile bash_logout xprofile xsession xsessionrc zsh zshrc zprofile zlogin zlogout zshenv zsh-theme fish ksh csh cshrc tcshrc yashrc yash_profile",
+      "apkbuild pkgbuild .envrc .hushlogin zshrc zshenv zlogin zprofile zlogout bashrc_apple_terminal zshrc_apple_terminal"
+    ],
+    "sql": [
+      "sql dsql",
+      ""
+    ],
+    "svelte": [
+      "svelte",
+      ""
+    ],
+    "swift": [
+      "swift",
+      ""
+    ],
+    "terraform": [
+      "tf tfvars",
+      ""
+    ],
+    "toml": [
+      "toml",
+      "cargo.lock pipfile poetry.lock uv.lock"
+    ],
+    "typescript": [
+      "ts cts mts",
+      ""
+    ],
+    "typescriptreact": [
+      "tsx",
+      ""
+    ],
+    "vb": [
+      "vb brs vbs bas vba",
+      ""
+    ],
+    "vue": [
+      "vue",
+      ""
+    ],
+    "xml": [
+      "xml xsd ascx atom axml axaml bpmn cpt csl csproj dita ditamap dtd ent mod dtml fsproj fxml iml isml jmx launch menu mxml nuspec opml owl proj props pt publishsettings pubxml pubxml.user rbxlx rbxmx rdf rng rss shproj storyboard svg targets tld tmx vbproj vcxproj vcxproj.filters wsdl wxi wxl wxs xaml xbl xib xlf xliff xpdl xul xoml",
+      ""
+    ],
+    "xsl": [
+      "xsl xslt",
+      ""
+    ],
+    "yaml": [
+      "yaml yml eyaml eyml cff",
+      ""
+    ],
+    "zig": [
+      "zig zon",
+      ""
+    ]
+  },
+  "themeVars": [
+    [
+      "--ide-bg",
+      "editor.background"
+    ],
+    [
+      "--ide-side",
+      "sideBar.background",
+      "editor.background"
+    ],
+    [
+      "--ide-fg",
+      "foreground",
+      "editor.foreground"
+    ],
+    [
+      "--ide-strong",
+      "editor.foreground",
+      "foreground"
+    ],
+    [
+      "--ide-muted",
+      "descriptionForeground",
+      "sideBarSectionHeader.foreground",
+      "editorLineNumber.foreground"
+    ],
+    [
+      "--ide-dim",
+      "disabledForeground",
+      "editorLineNumber.foreground"
+    ],
+    [
+      "--ide-border",
+      "panel.border",
+      "sideBar.border",
+      "editorGroup.border",
+      "contrastBorder",
+      "tab.border"
+    ],
+    [
+      "--ide-accent",
+      "focusBorder",
+      "activityBarBadge.background",
+      "button.background"
+    ],
+    [
+      "--ide-link",
+      "textLink.foreground"
+    ],
+    [
+      "--ide-hover",
+      "list.hoverBackground"
+    ],
+    [
+      "--ide-sel",
+      "list.activeSelectionBackground"
+    ],
+    [
+      "--ide-sel-off",
+      "list.inactiveSelectionBackground"
+    ],
+    [
+      "--ide-input",
+      "input.background"
+    ],
+    [
+      "--ide-input-border",
+      "input.border"
+    ],
+    [
+      "--ide-button",
+      "button.background"
+    ],
+    [
+      "--ide-button-hover",
+      "button.hoverBackground"
+    ],
+    [
+      "--ide-button-fg",
+      "button.foreground"
+    ],
+    [
+      "--ide-second",
+      "button.secondaryBackground"
+    ],
+    [
+      "--ide-second-hover",
+      "button.secondaryHoverBackground"
+    ],
+    [
+      "--ide-second-fg",
+      "button.secondaryForeground"
+    ],
+    [
+      "--ide-widget",
+      "editorWidget.background",
+      "editorSuggestWidget.background"
+    ],
+    [
+      "--ide-widget-border",
+      "editorWidget.border",
+      "editorSuggestWidget.border"
+    ],
+    [
+      "--ide-badge",
+      "badge.background"
+    ],
+    [
+      "--ide-badge-fg",
+      "badge.foreground"
+    ],
+    [
+      "--ide-err",
+      "errorForeground",
+      "editorError.foreground"
+    ],
+    [
+      "--ide-warn",
+      "editorWarning.foreground",
+      "list.warningForeground"
+    ],
+    [
+      "--ide-info",
+      "editorInfo.foreground"
+    ],
+    [
+      "--ide-ok",
+      "gitDecoration.addedResourceForeground",
+      "terminal.ansiGreen"
+    ],
+    [
+      "--ide-hl",
+      "list.highlightForeground"
+    ],
+    [
+      "--ide-find",
+      "editor.findMatchHighlightBackground"
+    ],
+    [
+      "--ide-find-now",
+      "editor.findMatchBackground"
+    ],
+    [
+      "--ide-guide",
+      "editorIndentGuide.background1",
+      "editorIndentGuide.background"
+    ],
+    [
+      "--ide-indent-guide",
+      "editorIndentGuide.background1",
+      "editorIndentGuide.background"
+    ],
+    [
+      "--ide-scroll",
+      "scrollbarSlider.background"
+    ],
+    [
+      "--ide-ed-sel",
+      "editor.selectionBackground"
+    ],
+    [
+      "--ide-selection",
+      "editor.selectionBackground"
+    ],
+    [
+      "--ide-line-nr",
+      "editorLineNumber.foreground"
+    ],
+    [
+      "--ide-line-nr-now",
+      "editorLineNumber.activeForeground"
+    ],
+    [
+      "--ide-caret",
+      "editorCursor.foreground"
+    ],
+    [
+      "--ide-line-hl",
+      "editor.lineHighlightBackground"
+    ],
+    [
+      "--ide-line-border",
+      "editor.lineHighlightBorder"
+    ],
+    [
+      "--ide-bracket",
+      "editorBracketMatch.background"
+    ],
+    [
+      "--ide-bracket-border",
+      "editorBracketMatch.border"
+    ],
+    [
+      "--ide-word-hl",
+      "editor.wordHighlightBackground"
+    ],
+    [
+      "--ide-ruler",
+      "editorRuler.foreground"
+    ],
+    [
+      "--ide-whitespace",
+      "editorWhitespace.foreground"
+    ],
+    [
+      "--ide-title-bg",
+      "titleBar.activeBackground"
+    ],
+    [
+      "--ide-git-modified",
+      "gitDecoration.modifiedResourceForeground"
+    ],
+    [
+      "--ide-git-added",
+      "gitDecoration.addedResourceForeground"
+    ],
+    [
+      "--ide-git-untracked",
+      "gitDecoration.untrackedResourceForeground"
+    ],
+    [
+      "--ide-git-deleted",
+      "gitDecoration.deletedResourceForeground"
+    ],
+    [
+      "--ide-git-renamed",
+      "gitDecoration.renamedResourceForeground"
+    ],
+    [
+      "--ide-git-conflict",
+      "gitDecoration.conflictingResourceForeground"
+    ]
+  ],
+  "themeTokens": [
+    [
+      "--hl-kw",
+      "keyword.control",
+      "keyword",
+      "storage.type",
+      "storage"
+    ],
+    [
+      "--hl-str",
+      "string.quoted.double",
+      "string.quoted",
+      "string"
+    ],
+    [
+      "--hl-num",
+      "constant.numeric"
+    ],
+    [
+      "--hl-title",
+      "entity.name.function",
+      "support.function"
+    ],
+    [
+      "--hl-type",
+      "entity.name.type",
+      "entity.name.class",
+      "support.type",
+      "support.class"
+    ],
+    [
+      "--hl-attr",
+      "variable.other.property",
+      "entity.other.attribute-name",
+      "support.type.property-name",
+      "variable.other"
+    ],
+    [
+      "--hl-meta",
+      "meta.preprocessor",
+      "keyword.control.directive",
+      "keyword.other.preprocessor",
+      "entity.name.function.preprocessor"
+    ],
+    [
+      "--hl-cmt",
+      "comment.line",
+      "comment"
+    ],
+    [
+      "--hl-del",
+      "markup.deleted",
+      "invalid"
+    ]
+  ]
+}

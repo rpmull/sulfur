@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const library = JSON.parse(readFileSync(new URL('../../internal/theme/themes.json', import.meta.url), 'utf8'));
+const library = JSON.parse(readFileSync(new URL('../../assets/themes.json', import.meta.url), 'utf8'));
 const source = readFileSync(new URL('../src/theme.js', import.meta.url), 'utf8');
 const families = ['catppuccin', 'dracula', 'nord', 'tokyo-night'];
 const contrast = (a, b) => {

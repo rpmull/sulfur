@@ -24,10 +24,11 @@ consistent repository-activity measure rather than mixing the two rankings.
 
 ## Servers and runtime prerequisites
 
-The language host is Go, in the phosphorus binary: Sulfur runs it in its own
-process for this computer, and as `phosphorus sulfur-language` over the saved
-login on a mesh host, which needs `phosphorus` on that login's PATH (the
-installers put it there). No interpreter is required. All installation
+The local language host is JavaScript in `server/languages.js`, running in Bun.
+It also accepts the existing `sulfur-language` helper protocol. A Phosphorus mesh
+continues to select its own `phosphorus` helper on remote hosts, independently
+of the implementation running in the Sulfur app. Packaged Sulfur includes Bun;
+Node.js is still needed for servers that require it. All installation
 directories belong to that login, at `~/.sulfur/languages/<extension id>` in its
 actual OS home. These executable packages are separate from the merged-home
 sandboxed JavaScript extensions.
@@ -243,11 +244,13 @@ uses smaller keyboard steps. Narrow windows retain the existing drawer layout.
 
 ```text
 node --test web/tests/*.test.mjs
-go test ./internal/sulfur
+bun test ./tests
 ```
 
-The Go tests cover the installer, the manifest and lock handling, archive
-safety, document gating and UTF-8 framing through a stand-in server. They never
+The JavaScript service tests cover the wire framing and project/virtual-document
+boundaries alongside files, collaboration, SQLite and extension conversion. Native
+installer transactions and platform-specific servers require the acceptance
+checks in `docs/tauri-js.md`. They never
 download a real language server or compile the application. The other platform-specific
 servers and mesh SSH transport should additionally be exercised on the user's
 target hosts after the user builds the application.

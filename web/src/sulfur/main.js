@@ -14,7 +14,7 @@ for (const type of ['keydown', 'keyup']) {
   }, true);
 }
 
-// the desktop app's window, from its Go shell; none in a browser
+// the desktop app's window, from its native shell; none in a browser
 const appWin = window.sulfurApp || null;
 standalone.app = !!appWin;
 const root = document.getElementById('sulfur');

@@ -1,0 +1,80 @@
+[
+  {
+    "name": "TestColorTheme",
+    "files": {
+      "extension/package.json": "{\"publisher\": \"pub\", \"name\": \"ext\", \"displayName\": \"%name%\", \"contributes\": {\"themes\": [\n\t\t\t{\"label\": \"Night\", \"uiTheme\": \"vs-dark\", \"path\": \"./themes/night.json\"},\n\t\t\t{\"label\": \"Day\", \"uiTheme\": \"vs\", \"path\": \"./themes/day.tmTheme\"},\n\t\t\t{\"label\": \"Gone\", \"uiTheme\": \"vs\", \"path\": \"./themes/missing.json\"}]}}",
+      "extension/package.nls.json": "{\"name\": \"Night and Day\"}",
+      "extension/themes/base.json": "{\"colors\": {\"editor.background\": \"#101010\", \"editor.foreground\": \"#eeeeee\"},\n\t\t\t\"tokenColors\": [{\"scope\": \"comment\", \"settings\": {\"foreground\": \"#777777\", \"fontStyle\": \"italic\"}}]}",
+      "extension/themes/night.json": "{\n\t\t\t// it includes its base, then overrides\n\t\t\t\"include\": \"./base.json\",\n\t\t\t\"colors\": {\"editor.background\": \"#000000\", \"sideBar.background\": \"#111111aa\", \"button.background\": \"url(evil)\",},\n\t\t\t\"tokenColors\": [\n\t\t\t\t{\"scope\": [\"keyword\", \"storage.type\"], \"settings\": {\"foreground\": \"#ff0000\"}},\n\t\t\t\t{\"scope\": \"keyword.control\", \"settings\": {\"foreground\": \"#ff00ff\"}},\n\t\t\t\t{\"scope\": \"string, string.quoted\", \"settings\": {\"foreground\": \"#00ff00\"}},\n\t\t\t\t{\"scope\": \"comment\", \"settings\": {\"fontStyle\": \"\"}},\n\t\t\t\t{\"scope\": \"entity.name.function\", \"settings\": {\"foreground\": \"#0000ff\"}},\n\t\t\t]}",
+      "extension/themes/day.tmTheme": "<plist><dict><key>settings</key><array>\n\t\t\t<dict><key>settings</key><dict><key>background</key><string>#ffffff</string><key>foreground</key><string>#202020</string></dict></dict>\n\t\t\t<dict><key>scope</key><string>keyword</string><key>settings</key><dict><key>foreground</key><string>#aa0000</string></dict></dict>\n\t\t</array></dict></plist>"
+    }
+  },
+  {
+    "name": "TestIconTheme",
+    "files": {
+      "extension/package.json": "{\"publisher\": \"pub\", \"name\": \"ext\", \"contributes\": {\"iconThemes\": [{\"id\": \"my-icons\", \"label\": \"My Icons\", \"path\": \"./icons/theme.json\"}]}}",
+      "extension/icons/theme.json": "{\n\t\t\t\"iconDefinitions\": {\n\t\t\t\t\"_file\": {\"iconPath\": \"./svg/file.svg\"},\n\t\t\t\t\"_folder\": {\"iconPath\": \"./svg/folder.svg\"},\n\t\t\t\t\"_ts\": {\"fontCharacter\": \"\\\\E001\", \"fontColor\": \"#3178c6\"},\n\t\t\t\t\"_unused\": {\"iconPath\": \"./svg/unused.svg\"},\n\t\t\t\t\"_lost\": {\"iconPath\": \"./svg/lost.svg\"}\n\t\t\t},\n\t\t\t\"fonts\": [{\"id\": \"glyphs\", \"src\": [{\"path\": \"./glyphs.woff\", \"format\": \"woff\"}], \"size\": \"150%\"}],\n\t\t\t\"file\": \"_file\", \"folder\": \"_folder\",\n\t\t\t\"fileExtensions\": {\"TS\": \"_ts\", \"md\": \"_lost\"},\n\t\t\t\"languageIds\": {\"lua\": \"_ts\"},\n\t\t\t\"light\": {\"fileNames\": {\"Makefile\": \"_folder\"}}\n\t\t}",
+      "extension/icons/svg/file.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+      "extension/icons/svg/folder.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+      "extension/icons/svg/unused.svg": "<svg/>",
+      "extension/icons/glyphs.woff": "wOFF"
+    }
+  },
+  {
+    "name": "TestLanguagesGrammarsSnippets",
+    "files": {
+      "extension/package.json": "{\"publisher\": \"pub\", \"name\": \"ext\", \"contributes\": {\n\t\t\t\"languages\": [{\"id\": \"demo\", \"aliases\": [\"Demo\", \"demo\"], \"extensions\": [\".demo\", \".DM\"], \"filenames\": [\"Demofile\"], \"configuration\": \"./demo.language-configuration.json\"},\n\t\t\t\t{\"id\": \"demo\", \"filenamePatterns\": [\"*.demo.txt\"]}],\n\t\t\t\"grammars\": [{\"language\": \"demo\", \"scopeName\": \"source.demo\", \"path\": \"./syntaxes/demo.tmLanguage\"},\n\t\t\t\t{\"language\": \"go\", \"scopeName\": \"source.go\", \"path\": \"./syntaxes/go.json\"},\n\t\t\t\t{\"scopeName\": \"demo.injection\", \"path\": \"./syntaxes/inject.json\", \"injectTo\": [\"source.js\"]}],\n\t\t\t\"snippets\": [{\"language\": \"demo\", \"path\": \"./snippets/demo.code-snippets\"}, {\"language\": \"javascript\", \"path\": \"./snippets/js.json\"}]}}",
+      "extension/demo.language-configuration.json": "{\"comments\": {\"lineComment\": \"--\", \"blockComment\": [\"{-\", \"-}\"]}, \"brackets\": [[\"{\", \"}\"], [\"(\", \")\"]],\n\t\t\t\"autoClosingPairs\": [{\"open\": \"\\\"\", \"close\": \"\\\"\"}], \"onEnterRules\": []}",
+      "extension/syntaxes/demo.tmLanguage": "<plist><dict><key>scopeName</key><string>source.demo</string><key>patterns</key><array>\n\t\t\t<dict><key>match</key><string>\\b(let|in)\\b</string><key>name</key><string>keyword.demo</string></dict></array></dict></plist>",
+      "extension/syntaxes/go.json": "{\"scopeName\": \"source.go\", \"patterns\": [{\"match\": \"func\", \"name\": \"keyword\"}]}",
+      "extension/syntaxes/inject.json": "{\"scopeName\": \"demo.injection\", \"patterns\": []}",
+      "extension/snippets/demo.code-snippets": "{\n\t\t\t// comments allowed\n\t\t\t\"Let\": {\"prefix\": [\"let\", \"lt\"], \"body\": [\"let ${1:x} = $0\", \"in\"], \"description\": \"a let\"},\n\t\t\t\"File\": {\"prefix\": \"file\", \"body\": \"-- ${TM_FILENAME}\"},\n\t\t\t\"NoPrefix\": {\"body\": \"x\"},\n\t\t}",
+      "extension/snippets/js.json": "{\"Log\": {\"prefix\": \"log\", \"body\": \"console.log($1)\", \"scope\": \"javascript,typescript\"}}"
+    }
+  },
+  {
+    "name": "TestKeybindingsAndUnsupported",
+    "files": {
+      "extension/package.json": "{\"publisher\": \"pub\", \"name\": \"ext\", \"main\": \"./out/extension.js\", \"contributes\": {\n\t\t\t\"commands\": [{\"command\": \"ext.go\", \"title\": \"Go\"}],\n\t\t\t\"keybindings\": [\n\t\t\t\t{\"command\": \"editor.action.copyLinesDownAction\", \"key\": \"Ctrl+Shift+D\", \"when\": \"editorTextFocus\"},\n\t\t\t\t{\"command\": \"-workbench.action.openRecent\", \"key\": \"ctrl+r\"},\n\t\t\t\t{\"command\": \"ext.go\", \"key\": \"ctrl+g\"},\n\t\t\t\t{\"command\": \"vim.thing\", \"key\": \"ctrl+v\"}],\n\t\t\t\"debuggers\": [{\"type\": \"x\"}], \"views\": {}, \"configuration\": {\"properties\": {\"ext.a\": {\"default\": 1}}},\n\t\t\t\"frobnicate\": []}}",
+      "extension/out/extension.js": "exports.activate = () => {}"
+    }
+  },
+  {
+    "name": "TestLanguageServer",
+    "files": {
+      "extension/package.json": "{\"publisher\": \"pub\", \"name\": \"ext\", \"displayName\": \"Demo LS\", \"main\": \"./dist/extension\",\n\t\t\t\"activationEvents\": [\"onLanguage:demo\"], \"dependencies\": {\"vscode-languageclient\": \"9\"},\n\t\t\t\"contributes\": {\"languages\": [{\"id\": \"demo\", \"extensions\": [\".demo\"]}],\n\t\t\t\"configuration\": {\"properties\": {\"demo.trace.server\": {\"default\": \"off\"}, \"demo.format.enable\": {\"default\": true}}}}}",
+      "extension/dist/extension.js": "const m = ctx.asAbsolutePath(\"./dist/languageserver.js\"),P=e.asAbsolutePath(\"./dist/l10n\"); new LanguageClient(\"demo\", {documentSelector: [{language: \"yaml\"}],initializationOptions:{l10nPath:P,icons:ctx.asAbsolutePath(\"media/icons\"),other:x.y}})",
+      "extension/dist/languageserver.js": "server",
+      "extension/dist/languageserver-web.js": "web server",
+      "extension/node_modules/vscode-languageserver/lib/node/main.js": "lib"
+    }
+  },
+  {
+    "name": "TestLanguageServer",
+    "files": {
+      "extension/package.json": "{\"publisher\": \"pub\", \"name\": \"lua\", \"main\": \"./client/out/extension.js\", \"activationEvents\": [\"onLanguage:lua\"]}",
+      "extension/client/out/extension.js": "require(\"vscode-languageclient/node\"); new LanguageClient(\"lua\")",
+      "extension/server/bin/lua-language-server.exe": "MZ",
+      "extension/server/bin/msvcp140.dll": "MZ"
+    }
+  },
+  {
+    "name": "TestLanguageServer",
+    "files": {
+      "extension/package.json": "{\"publisher\": \"pub\", \"name\": \"clangd\", \"main\": \"./out/extension.js\", \"devDependencies\": {\"vscode-languageclient\": \"9\"}, \"activationEvents\": [\"onLanguage:cpp\"]}",
+      "extension/out/extension.js": "download(\"https://github.com/clangd/clangd/releases\")"
+    }
+  },
+  {
+    "name": "TestBadPackages",
+    "files": {
+      "extension/readme.md": "x"
+    }
+  },
+  {
+    "name": "TestBadPackages",
+    "files": {
+      "extension/package.json": "{\"publisher\": \"p\", \"name\": \"n\", \"contributes\": {\"themes\": [{\"label\": \"Out\", \"path\": \"../../etc/passwd\"}], \"snippets\": [{\"language\": \"x\", \"path\": \"/abs.json\"}]}}"
+    }
+  }
+]

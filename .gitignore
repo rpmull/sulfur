@@ -1,30 +1,15 @@
-# per host keys, written by the app or phosphorus on first start
 .env
-
-# runtime state, regenerated per host, not shipped
-/state/
-
-# forgejo data root and the bundled tailscaled's identity, see gitd/
-/git/
-/tailscale/
-
 .DS_Store
 *.bak
-
-# default [files] share, contents per host, not shipped
-/files/*
-!/files/.gitkeep
-
-# go generate's web build, rebuilt in CI and the image
-/internal/web/dist/*
-!/internal/web/dist/README
-/web/.vendor/
-# installed JavaScript dependencies; keep dependency manifests and locks tracked
 node_modules/
-/sulfur
-/sulfur.exe
-/go.work
-/go.work.sum
+/web/.vendor/
+.tools/
+/dist/
+/out/
+/src-tauri/target/
+/src-tauri/binaries/
+/src-tauri/resources/
+/src-tauri/gen/
 __pycache__/
 *.pyc
-/out/
+/src-tauri/tauri.release.conf.json

@@ -30,61 +30,46 @@ directory; Nebula discovery is not a machine inventory. Each adapter must normal
 network's state, supply authentication, and establish which hosts actually have IDE services.
 An SSH port alone does not provide files, live sessions, language servers or shared homes.
 
-Sulfur draws the line the same way:
-
-- **Sulfur owns its host-side half: `hostkit`.** Toolchain probes, language servers, builds and
-  runs, git, SQLite and Open VSX conversion are Sulfur's code. That holds whether the code runs
-  inside Sulfur's own server for this computer, inside a Phosphorus host for the mesh, or as a
-  `sulfur-language` / `sulfur-sqlite` helper on a remote host.
-- **The mesh owns finding and reaching hosts.** `hostkit` never resolves a host name and never
-  holds a password. It takes a `hostkit.Login`: who the user is there, and a `Dial` that returns
-  an SSH client already logged in. Phosphorus dials with its tailnet addresses and the user's
-  saved logins. An overlay mesh dials its peer's address with the user's SSH keys or agent.
-- **Everything else is a capability a mesh may or may not give.** Phosphorus gives all of them.
-  A bare overlay mesh gives hosts, plus whatever Sulfur can build over SSH.
+Sulfur separates peer discovery from IDE services. The page and services are
+JavaScript; Phosphorus remains free to implement its side in Go. A mesh adapter
+normalizes its peers and exposes the version 1 file/session/tool APIs. A working
+SSH port alone is not sufficient to advertise those capabilities.
 
 ## The three seams
 
 ### 1. The page: `web/src/host/contract.js`
 
-Sulfur's code reaches whatever hosts its page only through `'#host'`, and only through the
-names in `contract.js`. The build binds `'#host'` per page:
+Sulfur imports its frontend host only as `#host`. Standalone binds that name to
+`web/src/sulfur/host.js`; the Phosphorus desktop binds it to its own host module.
+The contract includes live account/host state, files, settings, theme and terminal
+registries. Each page has one instance of stateful modules. Changes are additive
+and must be implemented in both hosts before either starts using a new export.
+The existing frontend boundary tests enforce this from Sulfur's side.
 
-| page | `'#host'` is | where |
-|------|--------------|-------|
-| Sulfur's app, and `/sulfur/` on a Phosphorus host | `web/src/sulfur/host.js` | this repository |
-| the Phosphorus desktop's Sulfur window | `web/src/host/desktop.js` | Phosphorus's repository |
+### 2. Host services and helper commands
 
-The contract includes the page's theme (`setPalette`, `PALETTES`, …) and its terminals
-(`startTerminal`, `taskTerminal`, `termsRetheme`). Each page has one instance of each. Inside
-the desktop, Sulfur's window wears the desktop's theme, and its terminals are rethemed along
-with the desktop's.
+| service | JavaScript owner | version 1 boundary |
+|---------|------------------|--------------------|
+| files/tree/search/upload | `server/files.js` | `/api/files/<host>/<operation>` |
+| live edit/disk conflicts | `server/collab.js` | `/api/code/<host>` socket |
+| terminals and reconnect | `server/processes.js` | `/api/term/<host>` socket |
+| toolchains, tasks, Git | `server/processes.js` | `/api/sulfur/toolchains`, `/run`, `/git` |
+| language management/LSP | `server/languages.js` | `/api/sulfur/languages` socket |
+| SQLite | `server/sqlite.js` | `/api/sulfur/sqlite` |
+| Open VSX | `server/registry.js`, `server/vsix.js` | `/api/sulfur/vsx/*` |
 
-`web/tests/host-boundary.test.mjs` holds Sulfur to the contract from this side: `host.js`
-exports every name, and Sulfur's code reaches its host through nothing else. Phosphorus's test
-of the same name holds `desktop.js` to it from the other side.
+`server/main.js sulfur-language <base64-request>` accepts the same request fields
+and newline JSON messages, and `server/main.js sulfur-sqlite` accepts its JSON
+request on stdin. Packaged `sulfur-service` accepts these commands directly.
+Phosphorus can keep invoking `phosphorus sulfur-language` and
+`phosphorus sulfur-sqlite` on its own hosts: those remote helpers belong to that
+mesh and do not need to switch implementations for the IDE to connect.
 
-### 2. The host: `hostkit`
-
-| call | what it does on a host |
-|------|------------------------|
-| `Probe(host, login, fresh)` | its compilers, runtimes and build tools (`/api/sulfur/toolchains`) |
-| `Start(host, login, task, out)` | a build or run in a pty, streamed (`/api/sulfur/run`) |
-| `LanguageSocket(ws, host, login)` | a language server session, or installing one (`/api/sulfur/languages`) |
-| `GitRemote(host, login, dir, args, …)` | git in a folder, for Source Control (`/api/sulfur/git`) |
-| `SQLiteRemote(ctx, host, login, req)` | a query on a database file (`/api/sulfur/sqlite`) |
-| `VSXServe(w, r)` | Open VSX search and Convert & Install (`/api/sulfur/vsx/*`) |
-| `LanguageMain`, `SQLiteMain` | the helpers run on the host itself, as `<Helper> sulfur-language` and `<Helper> sulfur-sqlite` |
-
-`hostkit.Login.Helper` selects the trusted command prefix per connection. It defaults to
-`sulfur`. Phosphorus explicitly passes `Helper: "phosphorus"`, so existing hosts still run
-the exact same helper commands. Helper selection never comes from a page request and is
-not global mutable state. `Login.Scope` can distinguish probe caches for meshes with the
-same host and user names. An adapter owns SSH key verification and credential storage;
-`Dial` returns its authenticated client, which hostkit closes after the operation.
-
-A host's helper may be older or newer than the Sulfur asking. Requests to it only ever gain
-fields; a field is never renamed or given a new meaning.
+The former Go `hostkit` source is absent on this branch. Existing Go importers
+must pin the last compatible Go revision (or retain that implementation in their
+own codebase) until they move to the service/CLI protocol. Do not replace a Go
+module pin with this JS branch and expect Go imports to resolve. The separate
+checkout used by the Phosphorus extraction is unchanged by this migration.
 
 ### 3. The API: what Sulfur's page calls
 
@@ -99,15 +84,14 @@ computer's part itself, so it works offline.
 | `home` | the merged home (`files` on the `home` share across hosts) | this computer's home | one home across hosts |
 | `sessions` | `/api/code/<host>?share=…&path=…` (socket), alongside `/api/files/…` | this computer | every host, edited together |
 | `terminals` | `/api/term/` (socket) | this computer | every host |
-| `toolchains`, `runs`, `languages`, `git`, `sqlite`, `vsx` | `/api/sulfur/*` | this computer, by `hostkit` | every host, by `hostkit` over SSH |
+| `toolchains`, `runs`, `languages`, `git`, `sqlite`, `vsx` | `/api/sulfur/*` | this computer, by the Bun service | every host, by its mesh service/helper |
 | `people` | sharing a file, `/api/me/vault` | — | the mesh's people |
 | `agents` | `/api/code/*` | — | Claude Code and opencode on any host |
 | `models` | `/api/model/v1/*` | — | chat and inline suggestions |
 | `forgejo` | `/api/sulfur/forgejo` | — | the mesh's Forgejo |
 
 Sulfur's server reports the linked mesh's kind and capabilities in `/api/sidecar/info` as
-`mesh: { kind, version: 1, caps }`. `internal/mesh` defines the adapter contract;
-`cmd/sulfur/mesh.go` registers the implemented providers. Only `phosphorus` is implemented
+`mesh: { kind, version: 1, caps }`. `server/mesh.js` defines and registers providers. Only `phosphorus` is implemented
 today. The overlay integrations below are extension designs, not working providers.
 
 ### State and compatibility
@@ -150,26 +134,20 @@ can release independently once Phosphorus pins a published compatible Sulfur ver
 
 ## Adding a kind of mesh
 
-A kind is an `internal/mesh.Kind`: its capabilities, `Normalize(endpoint)`, `Reach(endpoint)`
-and `Handler(endpoint)`. The endpoint is provider-owned; only the Phosphorus adapter requires
-an HTTP URL. The handler answers its machines' calls under `/api/mesh/`.
+A provider registers `{kind, version: 1, caps, normalize, reach}` through
+`registerMeshProvider` in `server/mesh.js`. Normalization returns the HTTP gateway
+for that provider; reachability is checked before the endpoint is remembered.
+The gateway translates its network discovery, authentication and host transport
+into the version 1 APIs under `/api/mesh/`.
 
-- **`phosphorus`** (built in): the handler is a reverse proxy to the Phosphorus server, which
-  answers every call above itself.
-- **An overlay mesh** (Tailscale, Headscale, NetBird, ZeroTier, Nebula) is the next kind. Its
-  handler is Sulfur's own:
-  - it reads the peers from the mesh's own status (`tailscale status --json`,
-    `netbird status --json`, ZeroTier's known peers and network membership, or a configured
-    Nebula host inventory) for `hosts`;
-  - it answers `files`, `terminals` and `/api/sulfur/*` over SSH, with a `hostkit.Login` whose
-    `Dial` reaches the peer's mesh address with the user's SSH agent or keys;
-  - it runs `sulfur sulfur-language` and `sulfur sulfur-sqlite` as the helpers, uploading a
-    compatible helper to the host the first time it is needed. Helper deployment is future
-    adapter work; no automatic upload or installation is implemented in this extraction.
+- **Phosphorus** is built in. Sulfur proxies to its existing server, which owns
+  authentication and remote services. No Phosphorus server deployment is changed.
+- **Overlay networks** need a gateway/adapter that reads network-specific peer
+  state, authenticates SSH or another transport, and implements file, session,
+  terminal and tool services. Tailscale, Headscale, NetBird, ZeroTier and Nebula
+  integrations are designs, not shipped providers. They must not advertise
+  merged `home`, `people`, `agents`, `models` or `forgejo` without implementing them.
 
-  It must implement file and session services too before advertising them. `hostkit` provides
-  the IDE tools, not an SSH filesystem or a collaboration server. `people`, `agents`, `models`
-  and `forgejo` stay out of its capabilities unless that provider supplies those services.
-
-Phosphorus's kind keeps working unchanged while other kinds are added. Its handler is the
-proxy, so nothing a new kind does reaches it.
+A future native extension host on a remote workspace also needs an explicit,
+authenticated host service. The local Bun extension process rejects remote
+workspace locations rather than reading similarly named local paths.

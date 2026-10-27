@@ -2,7 +2,7 @@ import { vscodeShim } from './vscode-shim.js';
 import { installExtensionResources } from './extension-resources.js';
 
 // the extension host's page: runs in the sandbox, turns the port into the api
-export function extensionHostMain(createVSCode, installResources) {
+export function extensionHostMain(createVSCode, installResources, runtime = null) {
   let port = null;
   let mod = null;
   // a converted VS Code extension's web build: its vscode API (vscode-shim.js)
@@ -185,8 +185,8 @@ export function extensionHostMain(createVSCode, installResources) {
           if (name === 'vscode') return shim.vscode;
           throw new Error(`require('${name}'): a VS Code web extension gets only 'vscode' in Sulfur`);
         };
-        new Function('module', 'exports', 'require', `${d.code}\n//# sourceURL=${encodeURIComponent(d.context.id)}-web.js`)(module, module.exports, require);
-        const ex = module.exports || {};
+        if (!runtime) new Function('module', 'exports', 'require', `${d.code}\n//# sourceURL=${encodeURIComponent(d.context.id)}-web.js`)(module, module.exports, require);
+        const ex = runtime ? await runtime.load(d, shim.vscode) : module.exports || {};
         mod = { deactivate: async () => { try { if (typeof ex.deactivate === 'function') await ex.deactivate(); } finally { shim.deactivate(); } } };
         if (typeof ex.activate === 'function') await ex.activate(shim.context);
         port.postMessage({ t: 'ready' });

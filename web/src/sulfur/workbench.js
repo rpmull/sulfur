@@ -49,6 +49,7 @@ import { applyTextEdits } from './language-client.js';
 import { sidebarRight, runTargetName, moveBookmarks } from './navigation.js';
 import { fileKind, renderFileIcon } from './file-icons.js';
 import { extensionHostHTML } from './extension-host.js';
+import { encodeExtensionMessage, decodeExtensionMessage } from './extension-wire.js';
 import { installExtensionResources } from './extension-resources.js';
 import { extensionConflicts, createExtensionConflictIndex, NATIVE_EXTENSIONS } from './extension-conflicts.js';
 import { installConvertedExtension } from './extension-install.js';
@@ -4841,6 +4842,10 @@ async function applyUpdate() {
   h.close();
   if (!I) return;
   if (!r?.ok) { notify('error', `The update failed: ${b.error || `status ${r?.status}`}`); return; }
+  if (b.prepared) { notify('info', `Verified update downloaded to ${b.file}. Install this package to update headless Sulfur.`); return; }
+  if (b.file && window.sulfurApp?.installUpdate) {
+    try { await window.sulfurApp.installUpdate(b.file); } catch (error) { notify('error', `The update failed: ${error.message || error}`); return; }
+  }
   notify('info', `Sulfur ${b.version} is installing; it opens again in a moment.`);
   setTimeout(() => standalone.quit?.(), 800);
 }
@@ -9177,7 +9182,7 @@ async function setExtEnabled(x, on) {
   paintExtView();
 }
 
-// a VS Code extension converted from Open VSX (internal/sulfur/vsx_convert.go): no main
+// a VS Code extension converted from Open VSX (hostkit/vsx_convert.go): no main
 // module, only what it declares
 const declarative = (x) => !!x.manifest?.sulfur?.declarative && !x.manifest.main;
 function applyExtensionContributions(x, on) {
@@ -9220,6 +9225,17 @@ async function activateExt(x) {
     try { packageJSON = parseJsonc((await readUser(`${x.dir}/${vs.root}/package.json`)) || '{}') || {}; } catch {}
     if (!active()) return;
     vscode = { root: vs.root, id: vs.id, defaults: vs.defaults || {}, packageJSON, extensions: extensionRegistry(), state: { global: extState(x, 'global'), workspace: extState(x, 'workspace') }, dark: getComputedStyle(I.w.node).colorScheme !== 'light' };
+  }
+  if (vs?.runtime === 'bun') {
+    if (!standalone?.info?.nodeExtensions) { extFailed(x, 'This extension needs Sulfur’s desktop Bun host. Browser and Phosphorus-hosted pages can run its browser build when one is available.'); return x.activation; }
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/sulfur/extensions/host`);
+    const port = { postMessage: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(encodeExtensionMessage(value)); }, close: () => ws.close() };
+    x.port = port;
+    ws.addEventListener('open', () => { if (active()) port.postMessage({ t: 'init', context: { id: x.id, extensionPath: x.dir, user: acct.user, workspace: I.st.root, workspaceLocation: apiLoc(), host: selfHost, vscode } }); else ws.close(); });
+    ws.addEventListener('message', (event) => { if (I === current && x.port === port) { try { extMessage(x, decodeExtensionMessage(event.data)); } catch (error) { extFailed(x, error.message); } } });
+    ws.addEventListener('close', () => { if (active()) extFailed(x, 'The Bun extension host stopped during activation'); });
+    x.timer = setTimeout(() => { if (active()) extFailed(x, 'activate() didn’t finish within 15 seconds'); }, 15000);
+    return x.activation;
   }
   const frame = el('iframe', 'ide-ext-frame');
   frame.setAttribute('sandbox', 'allow-scripts');
@@ -9287,6 +9303,7 @@ function teardownExt(x, keepFrame = false) {
   contribute(x);
   buildKeys();
   if (!keepFrame) x.frame?.remove();
+  if (!x.frame) x.port?.close?.();
   x.frame = null;
   x.port = null;
   applyExtensionContributions(x, false);
@@ -9943,7 +9960,7 @@ export function deactivate() {}
 
 // --- Open VSX: VS Code's extensions converted to Sulfur's -------------------------------------
 // The library pages through open-vsx.org with what each extension would convert to (read from
-// its package.json by the app's server, internal/sulfur/vsx.go); Convert & Install has the server
+// its package.json by the app's server, server/registry.js); Convert & Install has the server
 // fetch and convert the package and writes the result to ~/.sulfur/extensions, enabled
 
 const VSX_SORTS = [['relevance', 'Relevance'], ['downloads', 'Most Downloads'], ['rating', 'Highest Rated'], ['updated', 'Recently Updated']];
@@ -9969,7 +9986,7 @@ function openVsxLibrary(query = '') {
 
 function mountVsxLibrary(t) {
   const head = el('div', 'ide-vsx-head');
-  head.append(el('h1', '', 'Open VSX'), el('p', '', 'Convert extensions into Sulfur themes, icons, languages, snippets and language servers. Compatible browser builds use Sulfur commands, dialogs, sidebar views and custom editors. Each conversion reports compatibility limits, native feature overlaps and extension conflicts.'));
+  head.append(el('h1', '', 'Open VSX'), el('p', '', 'Convert extensions into Sulfur themes, icons, languages, snippets and language servers. Browser builds and compatible Node extensions use Sulfur commands, dialogs, sidebar views and custom editors. Node extensions run locally with your filesystem and process permissions. Each conversion reports compatibility limits, native feature overlaps and extension conflicts.'));
   const form = el('div', 'ide-vsx-form');
   const q = Object.assign(el('input', 'ide-input ide-vsx-q'), { type: 'search', placeholder: 'Search Open VSX', spellcheck: false });
   q.setAttribute('aria-label', 'Search Open VSX');

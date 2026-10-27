@@ -1,4 +1,4 @@
-// VS Code's extension API for a converted extension's web build (internal/sulfur/vsx_web.go):
+// VS Code's extension API for a converted extension's web build (hostkit/vsx_web.go):
 // the `vscode` module its code requires, made of Sulfur's extension api (the frame's port to
 // the workbench, workbench.js's extHostMain). Uris are paths of the home ('/user/...'), as
 // the api takes them; webviews and custom editors are Sulfur's webview tabs. What VS Code has
@@ -63,7 +63,13 @@ export function vscodeShim(api, host) {
     static joinPath(base, ...parts) { return base.with({ path: normal([base.path, ...parts].join('/')) }); }
     static from(c) { return new Uri(c.scheme, c.authority, c.path, c.query, c.fragment); }
     static isUri(v) { return v instanceof Uri; }
-    get fsPath() { return this.path; }
+    get fsPath() {
+      if (!context.nativeHomeRoot) return this.path;
+      const native = (p) => /^[a-z]:/i.test(context.nativeHomeRoot) ? p.replace(/\//g, '\\') : p;
+      if (/^\/[a-z]:\//i.test(this.path)) return native(this.path.slice(1));
+      if (this.path === `/${context.user}` || this.path.startsWith(`/${context.user}/`) || this.path.startsWith('/shared/')) return native(context.nativeHomeRoot.replace(/[\\/]+$/, '') + this.path);
+      return native(this.path);
+    }
     with(c = {}) { return new Uri(c.scheme ?? this.scheme, c.authority ?? this.authority, c.path ?? this.path, c.query ?? this.query, c.fragment ?? this.fragment); }
     toString(skipEncoding = false) {
       const path = skipEncoding ? this.path : this.path.split('/').map(encodeURIComponent).join('/');
@@ -130,7 +136,7 @@ export function vscodeShim(api, host) {
     const lines = text.split(/\r?\n/);
     const offsetAt = (p) => { let o = 0; for (let i = 0; i < p.line && i < lines.length; i++) o += lines[i].length + 1; return o + p.character; };
     return {
-      uri, fileName: uri.path, languageId: languageId || (uri.path.split('.').pop() || '').toLowerCase(), version: 1, isDirty: false, isClosed: false, isUntitled: false, eol: 1, lineCount: lines.length,
+      uri, fileName: uri.fsPath, languageId: languageId || (uri.path.split('.').pop() || '').toLowerCase(), version: 1, isDirty: false, isClosed: false, isUntitled: false, eol: 1, lineCount: lines.length,
       getText: (r) => (r ? text.slice(offsetAt(r.start), offsetAt(r.end)) : text),
       lineAt: (n) => { const i = typeof n === 'number' ? n : n.line; const t = lines[i] ?? ''; return { lineNumber: i, text: t, range: new Range(i, 0, i, t.length), isEmptyOrWhitespace: !t.trim(), firstNonWhitespaceCharacterIndex: t.length - t.trimStart().length }; },
       offsetAt,
@@ -396,7 +402,7 @@ export function vscodeShim(api, host) {
     fs,
     workspaceFolders: [folder],
     name: folder.name,
-    rootPath: workspaceUri.path,
+    rootPath: workspaceUri.fsPath,
     workspaceFile: undefined,
     isTrusted: true,
     textDocuments: [],
@@ -486,7 +492,7 @@ export function vscodeShim(api, host) {
       return undefined;
     },
   });
-  const extension = { id: extensionId, extensionUri, extensionPath: extensionUri.path, packageJSON, isActive: true, exports: undefined, extensionKind: 2 };
+  const extension = { id: extensionId, extensionUri, extensionPath: extensionUri.fsPath, packageJSON, isActive: true, exports: undefined, extensionKind: 2 };
   const extensionEvents = new EventEmitter();
   let installed = [];
   const updateExtensions = (items) => { installed = (items || []).filter((x) => String(x.id).toLowerCase() !== String(extensionId).toLowerCase()).map((x) => ({
@@ -530,7 +536,7 @@ export function vscodeShim(api, host) {
   const extensionContext = {
     subscriptions,
     extensionUri,
-    extensionPath: extensionUri.path,
+    extensionPath: extensionUri.fsPath,
     extension,
     globalState: memento('global'),
     workspaceState: memento('workspace'),
@@ -539,11 +545,11 @@ export function vscodeShim(api, host) {
     globalStorageUri: Uri.joinPath(extensionUri, '..', '.storage'),
     logUri: Uri.joinPath(extensionUri, '..', '.log'),
     storagePath: undefined,
-    globalStoragePath: `${root}/../.storage`,
-    logPath: `${root}/../.log`,
+    globalStoragePath: context.nativeHomeRoot ? Uri.joinPath(extensionUri, '..', '.storage').fsPath : `${root}/../.storage`,
+    logPath: context.nativeHomeRoot ? Uri.joinPath(extensionUri, '..', '.log').fsPath : `${root}/../.log`,
     extensionMode: 1,
     environmentVariableCollection: { persistent: false, replace() {}, append() {}, prepend() {}, get() {}, forEach() {}, delete() {}, clear() {}, getScoped() { return this; } },
-    asAbsolutePath: (rel) => normal(`${root}/${rel}`),
+    asAbsolutePath: (rel) => context.nativeHomeRoot ? Uri.joinPath(extensionUri, rel).fsPath : normal(`${root}/${rel}`),
     languageModelAccessInformation: { onDidChange: noEvent, canSendRequest: () => undefined },
   };
 

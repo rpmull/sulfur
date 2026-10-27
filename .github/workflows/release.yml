@@ -1,312 +1,105 @@
-# manual release: Sulfur's app for every OS (one Go binary around the system's web view:
-# setup .exe, .dmg and .deb) as vVERSION, its update feed on release `update`, then only
-# the two newest releases and runs kept.
-#
-# The feed needs UPDATE_SIGNING_KEY and var UPDATE_PUBKEY: the same key Phosphorus's releases
-# signed Sulfur with, since that's the key every installed Sulfur checks. Windows' code signing
-# takes vars AZURE_SIGNING_ENDPOINT/ACCOUNT/PROFILE and secrets AZURE_TENANT_ID/CLIENT_ID/
-# CLIENT_SECRET (Trusted Signing), or secrets WINDOWS_CERT_PFX/PASSWORD.
-#
-# Sulfur apps installed before Sulfur had its own repository read their feed off Phosphorus's
-# `update` release. With secret PHOSPHORUS_FEED_TOKEN (contents: write on pmghartman/phosphorus),
-# each release writes its sulfur-*.json there too, pointing at this repository's files, so those
-# apps update onto this feed.
+# Run manually after native acceptance testing. Pushing tauri-js never builds/releases an app.
 name: release
-
 on:
   workflow_dispatch:
     inputs:
-      major:
-        description: "Bump Major Version"
-        type: boolean
-        default: false
-
+      version:
+        description: "Three-part version, higher than every published Sulfur (for example 1.108.0)"
+        required: true
+        type: string
 permissions:
   contents: read
-
 concurrency:
-  group: release
+  group: sulfur-release
   cancel-in-progress: false
-
-env:
-  # Sulfur's last version released from Phosphorus's repository: versions here go on from it,
-  # so the apps that release installed take these as newer
-  FLOOR: "1.106"
-  # the repository whose `update` release older apps read their feed from
-  LEGACY_FEED_REPO: pmghartman/phosphorus
-
 jobs:
-  version:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      ver: ${{ steps.v.outputs.ver }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # one past the highest vMAJOR.MINOR tag here, or past FLOOR: minor, or major with .0
-      - name: next version
-        id: v
-        env:
-          MAJOR: ${{ inputs.major }}
-        run: |
-          L=$( { git ls-remote --tags origin | sed -n 's|.*refs/tags/v\([0-9]*\.[0-9]*\)$|\1|p'; echo "$FLOOR"; } | sort -t. -k1,1n -k2,2n | tail -1)
-          if [ "$MAJOR" = true ]; then V=$(( ${L%.*} + 1 )).0
-          else V=${L%.*}.$(( ${L#*.} + 1 ))
-          fi
-          echo "ver=$V" | tee -a "$GITHUB_OUTPUT"
-
-  # the page built once, from pinned npm tarballs, for every job that embeds it
-  web:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: go.mod
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: web/.vendor/cache
-          key: web-vendor-${{ hashFiles('web/vendor.lock') }}
-      # a binary without it serves nothing but 404s
-      - run: go generate ./internal/web && test -f internal/web/dist/sulfur/index.html
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: web-dist
-          path: internal/web/dist/
-          retention-days: 1
-
-  # the shipped license texts current with every dependency; needs the npm packages
-  licenses:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: go.mod
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: web/.vendor/cache
-          key: web-vendor-${{ hashFiles('web/vendor.lock') }}
-      - run: go generate ./internal/web
-      - name: licenses
-        run: |
-          go run ./cmd/licenses
-          git diff --exit-code THIRD_PARTY_LICENSES.txt || { echo "THIRD_PARTY_LICENSES.txt is stale, run make licenses and commit it" >&2; exit 1; }
-
-  # vet and tests gating the release; the page's own tests on node
-  check:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    needs: web
-    env:
-      CGO_ENABLED: 0
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: go.mod
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: web-dist
-          path: internal/web/dist
-      - run: test -z "$(gofmt -l cmd hostkit internal)" || { gofmt -l cmd hostkit internal; exit 1; }
-      - run: go vet ./... && GOOS=darwin go vet ./... && GOOS=windows go vet ./... && go test ./...
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: web/.vendor/cache
-          key: web-vendor-${{ hashFiles('web/vendor.lock') }}
-      # the tests import the page's npm packages as node does: the build's own, linked in
-      - run: go generate ./internal/web && ln -s .vendor/node_modules web/node_modules && node --test web/tests/*.test.mjs
-
-  # the app on every OS: one Go binary, its server and its window in one, on the system's
-  # web view; installers for every OS, each built on its own, as cgo draws the window
-  sulfur:
-    needs: [version, web]
+  app:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: linux-amd64, runner: ubuntu-24.04, arch: amd64 }
-          - { name: linux-arm64, runner: ubuntu-24.04-arm, arch: arm64 }
-          - { name: macos-universal, runner: macos-14 }
-          - { name: windows-x86_64, runner: windows-2022 }
+          - { runner: windows-2022, name: windows-x86_64 }
+          - { runner: macos-15-intel, name: darwin-x86_64 }
+          - { runner: macos-15, name: darwin-aarch64 }
+          - { runner: ubuntu-24.04, name: linux-x86_64 }
+          - { runner: ubuntu-24.04-arm, name: linux-aarch64 }
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    env:
-      VER: ${{ needs.version.outputs.ver }}
-      APP: packaging/sulfur
-      FEED_URL: https://github.com/${{ github.repository }}/releases/download/update
-      FEED_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
-      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
+    env:
+      VERSION: ${{ inputs.version }}
+      SULFUR_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/update
+      SULFUR_UPDATE_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.UPDATE_SIGNING_PASSWORD }}
+      AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: oven-sh/setup-bun@v2
         with:
-          go-version-file: go.mod
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: web-dist
-          path: internal/web/dist
-      # the .debs kept across releases: the runners' mirror can crawl
-      - name: apt cache
-        if: startsWith(matrix.name, 'linux')
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ~/apt-archives/*.deb
-          key: apt-${{ matrix.name }}-${{ github.run_id }}
-          restore-keys: apt-${{ matrix.name }}-
-      # GTK and WebKitGTK, the window's; only what the cache lacks downloaded
-      - name: linux deps
-        if: startsWith(matrix.name, 'linux')
-        timeout-minutes: 10
-        run: |
-          mkdir -p ~/apt-archives/partial
-          sudo apt-get update -q
-          sudo apt-get install -y -q -o Dir::Cache::Archives="$HOME/apt-archives" -o Acquire::Retries=3 libgtk-3-dev libwebkit2gtk-4.1-dev
-      # the packages in out/ under the release's names, the app's own update, signed for the feed, in upd/
-      - name: build
-        env:
-          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
-        run: |
-          mkdir -p out upd
-          case "${{ matrix.name }}" in
-            windows-*) $APP/windows.sh "$VER" "$PWD/out" "$PWD/upd" ;;
-            macos-*) $APP/macos.sh "$VER" "$PWD/out" "$PWD/upd" ;;
-            linux-*) $APP/linux.sh "$VER" ${{ matrix.arch }} "$PWD/out" ;;
-          esac
-          ls -l out
-          [ -n "$(ls -A out)" ] || { echo "no packages made" >&2; exit 1; }
+          bun-version: 1.4.4
+      - name: native prerequisites
+        if: startsWith(matrix.runner, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - name: Rust
+        run: rustup update stable && rustup default stable
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run check && bun test ./tests && bun run scripts/test-web.js
+      - name: version and signing configuration
+        run: bun scripts/release-version.js
+      - name: license notices
+        run: bun run licenses
+      - name: native app and signed updater
+        run: bun run build --config src-tauri/tauri.release.conf.json
+      - name: collect packages and legacy-compatible feeds
+        run: bun scripts/release-artifacts.js
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: out-sulfur-${{ matrix.name }}
+          name: sulfur-${{ matrix.name }}
           path: out/
           compression-level: 0
-          retention-days: 1
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: upd-sulfur-${{ matrix.name }}
-          path: upd/
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: ignore
-
-  release:
-    needs: [version, licenses, check, sulfur]
-    if: ${{ !cancelled() && !failure() }}
+          retention-days: 7
+  publish:
+    needs: app
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
     permissions:
       contents: write
     env:
-      VER: ${{ needs.version.outputs.ver }}
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          path: out
-          pattern: out-*
-          merge-multiple: true
-      - name: notes
-        run: |
-          {
-            echo "Sulfur, the code editor, on its own, for any computer: **Start Offline** for its own files, terminals and compilers, or link a mesh for its machines (a [Phosphorus](https://github.com/pmghartman/phosphorus) mesh also gives its agents, models and Forgejo)."
-            echo
-            echo "- **Windows:** run the \`sulfur-…-setup.exe\`."
-            echo "- **macOS:** open the \`.dmg\` (first time: right-click, Open)."
-            echo "- **Linux:** \`sudo apt install ./sulfur_${VER}_ARCH.deb\`."
-            echo
-            echo "The Windows and Mac apps update themselves; the .deb updates with apt."
-          } > "$RUNNER_TEMP/notes.md"
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
-        with:
-          tag_name: v${{ env.VER }}
-          name: Sulfur ${{ env.VER }}
-          target_commitish: ${{ github.sha }}
-          body_path: ${{ runner.temp }}/notes.md
-          files: out/*
-
-  # the update feed: this repository's own, and older apps' on Phosphorus's when the token's set
-  feed:
-    needs: [version, licenses, check, sulfur]
-    if: ${{ !cancelled() && !failure() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: write
-    env:
-      VER: ${{ needs.version.outputs.ver }}
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          path: upd
-          pattern: upd-*
-          merge-multiple: true
-      - name: update feed
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          LEGACY_TOKEN: ${{ secrets.PHOSPHORUS_FEED_TOKEN }}
-        run: |
-          mkdir -p upd && cd upd
-          BASE=https://github.com/$GH_REPO/releases/download/update
-          feed() { printf '{"version":"%s","url":"%s/%s","signature":"%s"}\n' "$VER" "$BASE" "$2" "$(cat "$2.sig")" > "$1.json"; }
-          if [ -e sulfur-macos-universal.app.tar.gz ]; then
-            feed sulfur-darwin-x86_64 sulfur-macos-universal.app.tar.gz
-            feed sulfur-darwin-aarch64 sulfur-macos-universal.app.tar.gz
-          fi
-          if [ -e sulfur-windows-x86_64-setup.exe ]; then feed sulfur-windows-x86_64 sulfur-windows-x86_64-setup.exe; fi
-          gh release view update >/dev/null 2>&1 || gh release create update --prerelease --latest=false --title "Update feed" --notes "Files installed Sulfur apps update from. Install from the numbered releases."
-          gh release upload update * --clobber
-          # older apps' feed: the same json, its urls already this repository's
-          if [ -n "$LEGACY_TOKEN" ] && ls sulfur-*.json >/dev/null 2>&1; then
-            GH_TOKEN=$LEGACY_TOKEN gh release upload update sulfur-*.json --clobber --repo "$LEGACY_FEED_REPO"
-          fi
-
-  # only the two newest numbered releases and their tags kept, the `update` feed aside;
-  # only this workflow's two newest runs, and the apt caches those two saved
-  prune:
-    needs: [release, feed]
-    if: ${{ !cancelled() && needs.release.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.feed.result) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      actions: write
-    env:
+      VERSION: ${{ inputs.version }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      LEGACY_TOKEN: ${{ secrets.PHOSPHORUS_FEED_TOKEN }}
+      LEGACY_FEED_REPO: ${{ vars.LEGACY_FEED_REPO || 'pmghartman/phosphorus' }}
     steps:
-      - name: releases
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: sulfur-*
+          merge-multiple: true
+          path: out
+      - name: numbered release
         run: |
-          gh release list --limit 200 --json tagName,createdAt --jq '[.[] | select(.tagName | test("^v[0-9]"))] | sort_by(.createdAt) | reverse | .[2:] | .[].tagName' |
-          while read -r t; do
-            echo "deleting release $t"
-            gh release delete "$t" --yes --cleanup-tag
-          done
-      - name: caches
+          printf 'Sulfur %s: Tauri desktop, Bun/JavaScript services, and compatible Phosphorus mesh and shared files.\n' "$VERSION" > notes.md
+          gh release create "v$VERSION" out/*.exe out/*.dmg out/*.deb out/*.AppImage out/*.tar.gz out/*.sig out/LICENSE out/THIRD_PARTY_LICENSES.txt --target "${{ github.sha }}" --title "Sulfur $VERSION" --notes-file notes.md
+      - name: update feeds (retain the existing signing key)
         run: |
-          keep=$(gh run list --workflow release.yml --limit 200 --json databaseId,createdAt --jq 'sort_by(.createdAt) | reverse | .[:2] | map(.databaseId | tostring) | join("|")')
-          gh cache list --limit 200 --json id,key --jq ".[] | select(.key | test(\"^apt-.*-[0-9]+\$\")) | select(.key | test(\"-($keep)\$\") | not) | .id" |
-          while read -r id; do
-            echo "deleting cache $id"
-            gh cache delete "$id" || true
-          done
-      - name: runs
-        run: |
-          gh run list --workflow release.yml --limit 200 --json databaseId,createdAt,status --jq 'sort_by(.createdAt) | reverse | .[2:] | .[] | select(.status == "completed") | .databaseId' |
-          while read -r id; do
-            echo "deleting run $id"
-            gh run delete "$id" || true
-          done
+          gh release view update >/dev/null 2>&1 || gh release create update --prerelease --latest=false --title 'Update feed' --notes 'Signed Sulfur update manifests.'
+          gh release upload update out/feed/*.json --clobber
+          if [ -n "$LEGACY_TOKEN" ]; then
+            GH_TOKEN="$LEGACY_TOKEN" gh release upload update out/feed/*.json --clobber --repo "$LEGACY_FEED_REPO"
+          fi

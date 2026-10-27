@@ -292,7 +292,7 @@ The code service's harnesses (Claude Code, opencode) come from the mesh, each an
 
 The desktop app always serves this computer. Connecting a mesh adds its machines, models, agents and Forgejo beside it. **Open Folder** and **Open File** use the same folder dialog, with local and mesh places together; a typed path works with Enter or the Open button. Losing the mesh does not prevent local editing, terminals or builds.
 
-Standalone Sulfur defaults to the same Phosphorus palette as the desktop. **Light** and **Dark** in the Color Theme picker select Phosphorus's corresponding appearance; every other theme in the library (`internal/theme/themes.json`), and a custom one made in the desktop, remain available separately. The titlebar keeps its height and window controls visible as the window narrows or shortens.
+Standalone Sulfur defaults to the same Phosphorus palette as the desktop. **Light** and **Dark** in the Color Theme picker select Phosphorus's corresponding appearance; every other theme in the library (`assets/themes.json`), and a custom one made in the desktop, remain available separately. The titlebar keeps its height and window controls visible as the window narrows or shortens.
 
 **Ctrl+B** builds the project. The first time, Sulfur looks at what the project is (CMake, a .NET solution or project, MSBuild, Cargo, Go, npm, Make, Meson, Python) and at the compilers each of your machines has. Where the project says how it builds, as Visual Studio reads it, Sulfur builds that way without asking:
 
@@ -448,3 +448,20 @@ export function activate(api) {
 - One editor group. Optional native language servers provide completion, semantic colors, navigation and diagnostics; the extension API does not expose VS Code's language-provider, decoration or debugger APIs.
 - Settings live in `~/.sulfur/settings.json` and keys in `~/.sulfur/keybindings.json`, both in your phosphorus home. Enabling an extension is remembered per browser.
 - Your editors are live sessions: anyone with the same file open, an agent included, edits the same text you see.
+
+
+## JavaScript desktop runtime (`tauri-js`)
+
+Open VSX browser builds continue to run in sandboxed frames. Their local CommonJS
+and ES module dependencies are bundled at conversion time. Node-only packages
+can now use a separate Bun process on this computer, including Node filesystem,
+process and package APIs, while their VS Code calls use the same Sulfur bridge.
+Native Node code has the OS permissions of the user; enabling it requires the
+existing extension trust decision. It cannot run against a remote workspace by
+mistaking that workspace for a local folder.
+
+Declarative contributions and extracted language servers remain usable without
+running package code. Unsupported VS Code services (such as debug adapter hosting)
+remain explicitly reported. Bun's Node compatibility and a JavaScript host expand
+compatibility; they do not imply support for every VS Code API or binary addon.
+See [the migration acceptance checks](tauri-js.md).

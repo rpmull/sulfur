@@ -1,4 +1,4 @@
-// markdown as the server renders it (goldmark, chroma, bluemonday), the page
+// markdown as the server renders it (marked, highlight.js, sanitize-html), the page
 // adding only katex for math, fetched on first use
 
 // the server's html for a text, by breaks and text

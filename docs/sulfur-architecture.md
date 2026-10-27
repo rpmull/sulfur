@@ -1,62 +1,56 @@
-# Sulfur and Phosphorus: where the code divides
+# Sulfur: native shell, JavaScript services, shared IDE page
 
-Sulfur runs in two places: inside the Phosphorus desktop (a window of the web desktop) and
-on its own (its desktop app, or `/sulfur/` on any Phosphorus host). One codebase serves
-both. The two sides meet at a single, written boundary.
+Sulfur owns this repository. Phosphorus owns mesh discovery, authentication,
+remote execution transport, merged-home placement, agents, models and Forgejo.
+They can develop and release independently against the version 1 wire protocol.
 
 ```
-web/
-  style.css            cascade order only: @imports of the parts below
-  src/
-    app.js, apps/      Phosphorus: the desktop and its apps
-    css/               Phosphorus's styles (desktop, shared looks, bar layout)
-    sulfur/            Sulfur: workbench.js, editor.js, its language, build and
-                       navigation modules, host.js (its own host), main.js (its entry),
-                       workbench.css and looks.css
-    host/
-      contract.js      the boundary: every name Sulfur may take from its host
-      desktop.js       the Phosphorus desktop as Sulfur's host (re-exports app.js)
-    lezer.js, md.js, theme.js, highlight-ranges.js, text-operations.js, …
-                       shared libraries, belonging to neither side
+src-tauri/       Tauri window, native dialogs, safe close, updater and process lifecycle
+server/          Bun HTTP/WebSocket services, files, collaboration, terminals,
+                 Git, SQLite, language servers and extension conversion/execution
+assets/          theme tokens and conversion mappings retained from the Go version
+web/src/sulfur/  the existing IDE, usable standalone or embedded in Phosphorus
+web/src/host/    the written frontend host contract
+scripts/         Bun preparation, builds, packaging, notices and release utilities
 ```
 
-## The rule
+The Tauri window still loads `http://127.0.0.1:47615/sulfur/`. The native shell
+starts a packaged Bun sidecar and waits for its ready message. It places the
+sidecar and its children in a process group/job, and terminates them on exit.
+Window close and OS quit first reach the IDE's existing unsaved-changes flow.
+The original app identifier and OS profile paths preserve browser storage.
 
-Sulfur's code, and the components it shares with the desktop (`apps/terminal.js`), import
-their host only as `'#host'`, and only the names listed in `src/host/contract.js`. The
-build binds `'#host'` per page (`cmd/webbuild`):
+The page reaches host state and services only through `#host`, with exports
+listed in `web/src/host/contract.js`. Standalone binds it to `sulfur/host.js`;
+Phosphorus binds it to its own `host/desktop.js`. Themes and terminal registries
+remain single instances per page. The original editor, file browser, shared-files
+view, source control, tasks, language clients, models and webview implementations
+remain the same frontend modules. `web/tests/host-boundary.test.mjs` checks this seam.
 
-| page                 | `'#host'` resolves to   | what it is                                    |
-|----------------------|-------------------------|-----------------------------------------------|
-| `index.html`         | `src/host/desktop.js`   | the desktop's own state and helpers            |
-| `sulfur/index.html`  | `src/sulfur/host.js`    | this computer offline, plus a remembered mesh  |
+The Bun service answers the original local HTTP/socket APIs. A remembered mesh
+is an additional `/api/mesh/` reverse proxy; remote requests keep their paths,
+query strings, cookies, bodies and binary socket frames. It never silently
+substitutes a local file for an unavailable remote one. Provider capabilities
+are registered in `server/mesh.js`; only Phosphorus is implemented today.
 
-The desktop reaches Sulfur in one way only: it loads `sulfur/workbench.js` when its Sulfur
-window opens (`ideStart`).
+Collaboration uses the frontend's UTF-16 OT operations on the server as well.
+Per-session queues serialize edits, saves and disk observations. File writes
+from agents retain incremental typing and presence. Disk conflicts retain both
+versions and require the existing resolution flow. Terminals use Bun's native
+PTY support, including ConPTY on Windows, with bounded replay and reconnect grace.
+SQLite streams result rows in two persistent worker processes with a query timeout.
 
-`web/tests/host-boundary.test.mjs` enforces this. Both hosts must export every name in the
-contract, and Sulfur's import graph must not reach `app.js` or the desktop's apps. The
-desktop's graph must not statically reach `sulfur/`.
+Open VSX declarative conversion retains themes, icons, grammars, snippets and
+native language servers. Browser code is bundled when the user converts it and
+runs in the existing sandbox. Node-only extensions can run in a separate local
+Bun process with package resolution and Node APIs. Both use the same VS Code API
+bridge, command/event messages and webview implementation. Native extensions have
+the user's OS permissions; the extension's existing trust prompt still applies.
+Bun/Node compatibility does not supply every VS Code API or native addon ABI.
 
-## Adding something Sulfur needs from its host
+Colors come from `assets/themes.json`. `scripts/themes.js` retains the original
+merge order, selectors and CSS token names. Bun builds hash/split/minify assets
+and precompress text files; the server streams files instead of buffering them.
 
-1. Add the name, with a one-line description, to `src/host/contract.js`.
-2. Export it from `app.js` and list it in `src/host/desktop.js`.
-3. Implement it in `src/sulfur/host.js`, offline first: Sulfur on its own must work with no
-   mesh at all.
-4. Run `node --test web/tests/*.test.mjs`.
-
-## Working offline
-
-Sulfur on its own needs no mesh. Its Go server (`cmd/sulfur`) answers the same APIs for this
-computer that a mesh host does: files, live editing sessions, terminals, toolchains,
-language servers, git and build/run tasks. A remembered mesh adds its machines under
-`/api/mesh/`, beside this computer and never instead of it. Only the chat's agents and AI
-completions need a mesh, for its models.
-
-## Styles
-
-`web/style.css` imports the parts in cascade order. Sulfur's rules live in
-`src/sulfur/workbench.css` (editor and workbench) and `src/sulfur/looks.css` (Sulfur under the
-macOS, Windows 11 and cli looks). Colors come from the theme library's `--ide-*` and `--hl-*`
-tokens in `internal/theme/themes.json`.
+Development commands, verification coverage and outstanding native acceptance
+checks are in [tauri-js.md](tauri-js.md).

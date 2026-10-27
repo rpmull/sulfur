@@ -1,5 +1,5 @@
 // TextMate grammars, as VS Code tokenizes with them: what a converted VS Code
-// extension (internal/sulfur/vsx_convert.go) brings for a language the page has no
+// extension (hostkit/vsx_convert.go) brings for a language the page has no
 // Lezer parser for. A line at a time, each line's tokens from the state the line
 // before left (the rules open across lines), scopes drawn under the hljs classes
 // the themes color. Oniguruma's patterns become JavaScript's: what can't

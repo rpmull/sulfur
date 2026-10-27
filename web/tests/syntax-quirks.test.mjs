@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { quirksFor, eachSyntaxError } from '../src/syntax-quirks.js';
 
 // the errors the syntax check reports: the grammar's, its gaps left out. The grammars come
-// from web/.vendor, with cmd/webbuild/patches.go's fixes put in
+// from web/.vendor, with scripts/grammar-patches.json's fixes put in
 async function errors(check, text) {
   const [mod, dialect] = check.split(':');
   const { parser } = await import(`../.vendor/node_modules/@lezer/${mod}/dist/index.js`);

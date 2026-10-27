@@ -27,19 +27,35 @@ Sulfur, while working as a fully offline IDE, can link a mesh and have its machi
 [`docs/mesh-protocol.md`](docs/mesh-protocol.md) covers how meshes of different kinds are added and supported by Sulfur.
 
 
-## Building
+## Development (`tauri-js`)
 
-Go 1.26. No node needed for the build. After generating the page, link
-`web/node_modules` to `.vendor/node_modules` and run `node --test web/tests/*.test.mjs`
-for the page's tests. On Windows, use a directory junction instead of a symlink.
+Sulfur's desktop shell is Tauri 2. The IDE services, package conversion, language
+server management and extension host run in Bun/JavaScript. Packaged apps include
+the Bun runtime; users do not install Go, Bun or Node to run the editor. Individual
+language servers retain their documented toolchain prerequisites.
+
+Install Bun **1.4.4**, Rust **1.90+**, Node **22+** for the existing frontend tests,
+and [Tauri's native prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
-go generate ./internal/web    # the page, from pinned npm tarballs
-go run ./cmd/sulfur           # the app
-go test ./...
+bun install --frozen-lockfile --ignore-scripts
+bun run test                 # service/extension and existing frontend tests; no build
+bun run check                # syntax, configuration and dependency boundary checks
+bun run dev                  # developer-run: web build, JS service and Tauri window
+bun run build                # developer-run: this OS's native installer and sidecar
 ```
 
-`packaging/sulfur/build.sh` makes this OS's installer.
+`bun run build:web` produces a separately hostable page in `dist/`.
+`bun run start` serves that page and the local APIs at `127.0.0.1:47615`.
+All build commands above are for the developer to run; repository instructions
+prohibit agents from running builds.
+
+See [migration and acceptance testing](docs/tauri-js.md),
+[architecture](docs/sulfur-architecture.md), and the
+[mesh protocol](docs/mesh-protocol.md). The `tauri-js` branch is independently
+reviewable; existing Phosphorus Go consumers should remain pinned to the last
+compatible Go revision until they adopt the service protocol. Linking meshes
+continues to use the same HTTP and WebSocket APIs across either implementation.
 
 ## License
 
