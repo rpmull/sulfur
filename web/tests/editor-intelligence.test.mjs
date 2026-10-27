@@ -100,9 +100,13 @@ test('a parse made a screen at a time, then in slices, ends as the whole parse d
   assert.equal(r.complete, false);
   assert.ok(r.tree.length >= 2000 && r.tree.length < text.length);
   assert.equal(cache.current(parser, text), null);
-  // an edit before the rest is parsed, then slices to the end
+  // an edit before the rest is parsed, then slices to the end: the editor's 8ms slices, each
+  // reaching further, however slow the machine
   text = text.slice(0, 500) + 'let q = 1;\n' + text.slice(500);
-  for (let n = 0; n < 10000 && !(r = cache.parseTo(parser, text, 0, 1)).complete; n++);
+  for (let reach = 0, stalled = 0; !(r = cache.parseTo(parser, text, 0, 8)).complete; reach = Math.max(reach, r.tree.length)) {
+    stalled = r.tree.length > reach ? 0 : stalled + 1;
+    assert.ok(stalled < 50, `slices stopped advancing at ${reach} of ${text.length}`);
+  }
   assert.ok(r.complete);
   assert.equal(cache.current(parser, text).toString(), parser.parse(text).toString());
   // and parse() finishes a partial one as the same tree

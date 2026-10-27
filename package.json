@@ -1,6 +1,6 @@
 {
   "name": "@rpmull/sulfur",
-  "version": "1.108.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {

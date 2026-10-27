@@ -1,19 +1,27 @@
 # Run manually after native acceptance testing. Pushing tauri-js never builds/releases an app.
 name: release
+# The version is 1.0.<commits reachable from the dispatched commit>: the same commit always
+# releases as the same version, and each later commit as a higher one.
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Three-part version, higher than every published Sulfur (for example 1.108.0)"
-        required: true
-        type: string
 permissions:
   contents: read
 concurrency:
   group: sulfur-release
   cancel-in-progress: false
 jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.count.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - id: count
+        run: echo "version=1.0.$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
   app:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -29,7 +37,7 @@ jobs:
       run:
         shell: bash
     env:
-      VERSION: ${{ inputs.version }}
+      VERSION: ${{ needs.version.outputs.version }}
       SULFUR_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/update
       SULFUR_UPDATE_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
@@ -76,12 +84,12 @@ jobs:
           compression-level: 0
           retention-days: 7
   publish:
-    needs: app
+    needs: [version, app]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
-      VERSION: ${{ inputs.version }}
+      VERSION: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       LEGACY_TOKEN: ${{ secrets.PHOSPHORUS_FEED_TOKEN }}
