@@ -141,8 +141,9 @@ to the developer under `AGENTS.md`.
 ## Signing, notices and release
 
 The manual-only release workflow runs on five native targets. Pushing this branch
-does not build an app or publish a release. Supply a three-part version higher than
-the last published Go release. It retains `UPDATE_SIGNING_KEY` and `UPDATE_PUBKEY`;
+does not build an app or publish a release. Its version is `1.0.<commit count>` of
+the dispatched commit, so a rerun of one commit releases the same version. It
+retains `UPDATE_SIGNING_KEY` and `UPDATE_PUBKEY`;
 set `UPDATE_SIGNING_PASSWORD` for an encrypted key. **Keep the existing public
 key**, since installed apps already trust it. Both old public-key input formats
 are normalized for Tauri. Windows Authenticode still uses the existing Trusted
