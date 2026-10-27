@@ -1,13 +1,13 @@
-// The boundary between Sulfur and whatever hosts it. Sulfur's code (web/src/sulfur/) and the
-// components it shares with the desktop (apps/terminal.js) import their host only as '#host',
+// The boundary between Sulfur and whatever hosts its page. Sulfur's code (web/src/sulfur/) and
+// the terminals it shares with its host (apps/terminal.js) import their host only as '#host',
 // and only these names. The build binds '#host' per page:
 //
-//   the Phosphorus desktop (index.html)    → host/desktop.js, re-exporting app.js
-//   Sulfur on its own (sulfur/index.html)  → sulfur/host.js, this computer offline or a mesh
+//   Sulfur on its own (sulfur/index.html)  → sulfur/host.js, this computer and a linked mesh
+//   the Phosphorus desktop's Sulfur window → its host/desktop.js, in Phosphorus's repository
 //
-// Both must export every name here; web/tests/host-boundary.test.mjs holds them to it, and
-// holds Sulfur to importing nothing of the desktop (app.js, apps/*) but through this list.
-// A new need of Sulfur's is added here first, then to both hosts.
+// Both must export every name here. web/tests/host-boundary.test.mjs holds Sulfur and its own
+// host to it; Phosphorus's test of the same name holds the desktop to it. A new need of
+// Sulfur's is added here first, then to both hosts (docs/mesh-protocol.md).
 
 export const HOST_API = {
   // where Sulfur runs: null inside the desktop, its mode, window and mesh when alone
@@ -63,5 +63,18 @@ export const HOST_API = {
   newSid: '() → a fresh session id',
   shQuote: '(value) → a single-quoted shell word',
   jsonPost: '(body) → fetch options posting it as JSON',
+
+  // the page's theme: one per page, so Sulfur in the desktop wears the desktop's
+  LOOK_IDS: 'every built-in look\'s id',
+  PALETTES: 'the themes to pick from',
+  PALETTE_EVENT: 'the event dispatched on a theme change',
+  lookNow: '() → the built-in look the page wears',
+  paletteNow: '() → the theme picked',
+  setPalette: '(id) → that theme worn and remembered',
+
+  // the page's terminals: one set per page, so the host rethemes Sulfur's with its own
+  startTerminal: '(el, host, sid, shared, ...) → a terminal on host in el',
+  taskTerminal: '(el, host, task, ...) → a build or run streamed from host',
+  termsRetheme: '() → every terminal on the page in the theme worn now',
 };
 export const HOST_NAMES = Object.keys(HOST_API);

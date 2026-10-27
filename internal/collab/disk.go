@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pmghartman/phosphorus/internal/files"
+	"github.com/pmghartman/sulfur/internal/files"
 )
 
 // One watcher per host, only while editors are attached. Unchanged files cost

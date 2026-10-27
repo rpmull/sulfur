@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pmghartman/phosphorus/internal/appfeed"
+	"github.com/pmghartman/sulfur/internal/appfeed"
 )
 
 // set at release: the feed and the key its updates are signed with

@@ -21,5 +21,10 @@
 /web/.vendor/
 # installed JavaScript dependencies; keep dependency manifests and locks tracked
 node_modules/
-/phosphorus
+/sulfur
+/sulfur.exe
+/go.work
+/go.work.sum
+__pycache__/
+*.pyc
 /out/

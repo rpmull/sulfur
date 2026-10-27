@@ -1,8 +1,8 @@
-/* the page's styles, in cascade order; each part's own file:
-   Phosphorus's (src/css/) and Sulfur's (src/sulfur/), so either is worked on alone */
+/* Sulfur's standalone page styles, in cascade order. Base desktop styling was
+   extracted with the IDE; these files belong to Sulfur and need no other checkout. */
 
 /* the theme library's tokens, generated from internal/theme/themes.json by the build */
-@import "phosphorus:themes";
+@import "sulfur:themes";
 @import "./src/css/phosphorus.css";
 @import "./src/sulfur/workbench.css";
 @import "./src/css/looks.css";

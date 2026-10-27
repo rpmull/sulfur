@@ -20,12 +20,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pmghartman/phosphorus/internal/util"
+	"github.com/pmghartman/sulfur/internal/util"
 )
 
 var (
-	FilesRoot = util.Env("FILES_ROOT", filepath.Join(util.RepoDir, "files"))
-	StateDir  = util.StateDir
+	FilesRoot = util.Env("FILES_ROOT", filepath.Join(os.TempDir(), "sulfur-files"))
 	HomeFS    = util.Env("HOME_FS", FilesRoot)
 	HomeRoot  = filepath.Join(HomeFS, Home)
 )
@@ -83,9 +82,6 @@ func splitList(v string) []string {
 	}
 	return out
 }
-
-// ConfiguredDirs [files] dir as phosphorus.ini says now
-func ConfiguredDirs() []string { return splitList(util.Ini("files", "dir")) }
 
 func mountedDirs() []string { return splitList(os.Getenv("PHOSPHORUS_FILES_DIRS")) }
 
@@ -1036,35 +1032,6 @@ func Remove(sh *Share, rel string) (int, any) {
 	}
 	changed(*sh, "delete", RelOf(*sh, abs), "")
 	return 200, map[string]any{"ok": true}
-}
-
-// Pending what phosphorus.ini asks for against what is mounted
-func Pending() bool {
-	home := slashed(util.RepoDir)
-	norm := func(d string) string {
-		p := slashed(strings.TrimSpace(d))
-		abs := p
-		if !absRe.MatchString(p) {
-			abs = path.Join(home, p)
-		}
-		return trailRe.ReplaceAllString(path.Clean(abs), "$1")
-	}
-	join := func(ds []string) string {
-		out := []string{}
-		for _, d := range ds {
-			if d != "" {
-				out = append(out, norm(d))
-			}
-		}
-		return strings.Join(out, ",")
-	}
-	want := join(ConfiguredDirs())
-	have := mountedDirs()
-	if len(have) == 0 {
-		have = []string{os.Getenv("PHOSPHORUS_FILES_DIR")}
-	}
-	h := join(have)
-	return want != "" && h != "" && want != h
 }
 
 // Who {user, admin} off the session, nil without one

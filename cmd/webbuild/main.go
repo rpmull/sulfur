@@ -25,7 +25,7 @@ import (
 
 	"github.com/evanw/esbuild/pkg/api"
 
-	"github.com/pmghartman/phosphorus/internal/theme"
+	"github.com/pmghartman/sulfur/internal/theme"
 )
 
 type pkg struct {
@@ -83,17 +83,18 @@ func main() {
 	assets["katex.css"] = "/" + kdir + "/katex.css"
 	define, _ := json.Marshal(assets)
 	// the theme library's tokens as CSS, the first thing style.css imports
-	themes := api.Plugin{Name: "phosphorus-themes", Setup: func(b api.PluginBuild) {
-		b.OnResolve(api.OnResolveOptions{Filter: `^phosphorus:themes$`}, func(api.OnResolveArgs) (api.OnResolveResult, error) {
-			return api.OnResolveResult{Path: "themes.css", Namespace: "phosphorus-themes"}, nil
+	themes := api.Plugin{Name: "sulfur-themes", Setup: func(b api.PluginBuild) {
+		b.OnResolve(api.OnResolveOptions{Filter: `^(sulfur|phosphorus):themes$`}, func(api.OnResolveArgs) (api.OnResolveResult, error) {
+			return api.OnResolveResult{Path: "themes.css", Namespace: "sulfur-themes"}, nil
 		})
-		b.OnLoad(api.OnLoadOptions{Filter: `.*`, Namespace: "phosphorus-themes"}, func(api.OnLoadArgs) (api.OnLoadResult, error) {
+		b.OnLoad(api.OnLoadOptions{Filter: `.*`, Namespace: "sulfur-themes"}, func(api.OnLoadArgs) (api.OnLoadResult, error) {
 			css := theme.Load().CSS()
 			return api.OnLoadResult{Contents: &css, Loader: api.LoaderCSS}, nil
 		})
 	}}
-	// '#host', the one way Sulfur and the components it shares reach whatever hosts them
-	// (web/src/host/contract.js): bound per page to that page's host, never left to a default
+	// '#host', the one way Sulfur and the terminals it shares reach whatever hosts them
+	// (web/src/host/contract.js): Sulfur's own host here; the Phosphorus desktop's build
+	// binds it to the desktop
 	hostOf := func(impl string) api.Plugin {
 		abs, _ := filepath.Abs(filepath.Join(*src, impl))
 		return api.Plugin{Name: "sulfur-host", Setup: func(b api.PluginBuild) {
@@ -126,11 +127,7 @@ func main() {
 			Plugins:           []api.Plugin{themes, hostOf(host)},
 		}
 	}
-	// the desktop's page, Sulfur's host the desktop itself
-	page(*out, filepath.Join(*src, "index.html"), "index.html", "/src/main.js", api.Build(opts("src/main.js", "assets", "src/host/desktop.js")))
-
-	// Sulfur alone, its desktop app's page and /sulfur/ on every host: its own host, so
-	// nothing of the desktop comes with it
+	// Sulfur's page, its app's and the one a host serves at /sulfur/: its own host
 	alone := opts("src/sulfur/main.js", "sulfur/assets", "src/sulfur/host.js")
 	page(*out, filepath.Join(*src, "sulfur.html"), "sulfur/index.html", "/src/sulfur/main.js", api.Build(alone))
 	must(copyDir(filepath.Join(*src, "static"), *out, ""))
@@ -143,7 +140,7 @@ func main() {
 		n++
 		return precompress(p, hashedPath(*out, p))
 	}))
-	log.Printf("built the desktop's page and Sulfur's, %d files precompressed", n)
+	log.Printf("built Sulfur's page, %d files precompressed", n)
 }
 
 // page a build's html: its entry and style put in
@@ -299,11 +296,11 @@ func copyDir(from, to, ext string) error {
 	})
 }
 
-// hashedPath under assets/, sulfur/assets/ or vendor/h/, the server's cached-for-good files
+// hashedPath under sulfur/assets/ or vendor/h/, the server's cached-for-good files
 func hashedPath(out, p string) bool {
 	rel, _ := filepath.Rel(out, p)
 	rel = filepath.ToSlash(rel)
-	return strings.HasPrefix(rel, "assets/") || strings.HasPrefix(rel, "sulfur/assets/") || strings.HasPrefix(rel, "vendor/h/")
+	return strings.HasPrefix(rel, "sulfur/assets/") || strings.HasPrefix(rel, "vendor/h/")
 }
 
 // precompress p as .gz, a hashed file's own copy then dropped

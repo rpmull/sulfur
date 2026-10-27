@@ -12,7 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/pmghartman/phosphorus/internal/util"
+	"github.com/pmghartman/sulfur/internal/util"
 )
 
 const (

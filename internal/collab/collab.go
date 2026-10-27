@@ -10,9 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pmghartman/phosphorus/internal/files"
-	"github.com/pmghartman/phosphorus/internal/users"
-	"github.com/pmghartman/phosphorus/internal/wsock"
+	"github.com/pmghartman/sulfur/internal/files"
+	"github.com/pmghartman/sulfur/internal/wsock"
 )
 
 const (
@@ -541,7 +540,7 @@ func Attach(ws *wsock.Conn, shareID, rel string, w *files.Who) {
 		return
 	}
 	if sh.ID == "home" {
-		if why := files.HomeGate(w, rel, users.Exists); why != "" {
+		if why := files.HomeGate(w, rel, noUsers); why != "" {
 			fail(why)
 			return
 		}
@@ -651,3 +650,6 @@ func Forward(ws *wsock.Conn, lookup func() string, cookie string) {
 		mu.Unlock()
 	}
 }
+
+// noUsers Sulfur's server is one person's: no other home folder is anyone's
+func noUsers(string) bool { return false }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { hostFixture } from './helpers/host-fixture.mjs';
 
 test('a linked mesh stays beside local files and is cleared on disconnect or switch', async () => {
   const original = { fetch: globalThis.fetch, WebSocket: globalThis.WebSocket, setTimeout: globalThis.setTimeout };
@@ -22,8 +22,7 @@ test('a linked mesh stays beside local files and is cleared on disconnect or swi
     return Response.json({ ok: true });
   };
   try {
-    const source = "const location = { protocol: 'http:', host: 'localhost' };\n" + (await readFile(new URL('../src/sulfur/host.js', import.meta.url), 'utf8')).replace('__ASSETS__', '{}').replace("import { themeFromStorage } from '../theme.js';", 'const themeFromStorage = () => {};') + '\n//# sourceURL=sulfur-host-fixture.mjs';
-    const host = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+    const host = await hostFixture();
     host.bootLocal({ mode: 'mesh', host: 'pc', user: 'tester', server: 'https://mesh', info: { files: { shares: [] } } });
     assert.equal(host.selfHost, 'pc');
     assert.deepEqual(host.dkLiveHosts(), ['pc']);
@@ -47,5 +46,40 @@ test('a linked mesh stays beside local files and is cleared on disconnect or swi
     await host.sidecarMode('link', 'https://another-mesh');
     assert.deepEqual(host.dkLiveHosts(), ['pc']);
     assert.equal(host.standalone.meshUser, '');
+  } finally { Object.assign(globalThis, original); }
+});
+
+test('Phosphorus shared files stay merged across hosts and reads and saves reach their holder', async () => {
+  const original = { fetch: globalThis.fetch, WebSocket: globalThis.WebSocket, setTimeout: globalThis.setTimeout };
+  const calls = [];
+  const state = {
+    self: { host: 'a' },
+    hosts: Object.fromEntries(['a', 'b'].map((h) => [h, { files: { shares: [{ id: 'home', home: true, label: '/home', perms: 'rwd' }] } }])),
+    tailnet: ['a', 'b'].map((name) => ({ name, phosphorus: true })),
+  };
+  globalThis.setTimeout = () => 0;
+  globalThis.WebSocket = class {
+    constructor() { queueMicrotask(() => this.onmessage({ data: JSON.stringify(state) })); }
+  };
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    if (url === '/api/me') return Response.json({ user: 'ann', vault: { hosts: {} } });
+    if (url.includes('/list?')) {
+      assert.equal(new URL(url, 'http://local').searchParams.get('path'), 'shared');
+      return Response.json({ entries: [{ name: url.includes('/b/') ? 'only-b.txt' : 'only-a.txt' }, { name: 'both.txt' }] });
+    }
+    return Response.json({ ok: true });
+  };
+  try {
+    const host = await hostFixture();
+    await host.bootMesh('https://mesh');
+    assert.deepEqual(host.homeOnline(), ['a', 'b']);
+    const shared = await host.filesCall(host.HOME, 'list', undefined, { path: 'shared' });
+    assert.deepEqual(shared.entries.map((e) => e.name).sort(), ['both.txt', 'only-a.txt', 'only-b.txt']);
+    assert.deepEqual(shared.entries.find((e) => e.name === 'both.txt').hosts, ['a', 'b']);
+    assert.equal(host.homePick('shared/only-b.txt'), 'b');
+    assert.match(host.filesApi(host.HOME, 'read', { path: 'shared/only-b.txt' }), /^\/api\/files\/b\/read\?/);
+    await host.filesCall(host.HOME, 'save', host.jsonPost({ path: 'shared/only-b.txt', text: 'edit' }));
+    assert.ok(calls.some((c) => c.url.startsWith('/api/files/b/save?') && JSON.parse(c.init.body).text === 'edit'));
   } finally { Object.assign(globalThis, original); }
 });

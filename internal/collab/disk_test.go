@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pmghartman/phosphorus/internal/files"
+	"github.com/pmghartman/sulfur/internal/files"
 )
 
 // Run with go test ./internal/collab; these tests do not need a UI or watcher.

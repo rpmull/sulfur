@@ -1,7 +1,8 @@
 // sulfur: Sulfur's own server on this computer, started by its desktop app.
 // It serves this computer's files, terminals, builds and compilers at all times.
-// A remembered mesh is reachable beside them under /api/mesh/, for its machines,
-// agents, models and Forgejo. Only on 127.0.0.1, and only to its own page: every request's
+// A remembered mesh is reachable beside them under /api/mesh/, for its machines
+// and whatever else its kind gives (mesh.go): a Phosphorus mesh's agents, models
+// and Forgejo too. Only on 127.0.0.1, and only to its own page: every request's
 // Host and Origin held to it, so no other site in a browser reaches it.
 package main
 
@@ -23,13 +24,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pmghartman/phosphorus/internal/code"
-	"github.com/pmghartman/phosphorus/internal/collab"
-	"github.com/pmghartman/phosphorus/internal/files"
-	"github.com/pmghartman/phosphorus/internal/sulfur"
-	"github.com/pmghartman/phosphorus/internal/util"
-	"github.com/pmghartman/phosphorus/internal/web"
-	"github.com/pmghartman/phosphorus/internal/wsock"
+	"github.com/pmghartman/sulfur/hostkit"
+	"github.com/pmghartman/sulfur/internal/collab"
+	"github.com/pmghartman/sulfur/internal/files"
+	"github.com/pmghartman/sulfur/internal/util"
+	"github.com/pmghartman/sulfur/internal/web"
+	"github.com/pmghartman/sulfur/internal/wsock"
 )
 
 // version set by the build
@@ -54,6 +54,16 @@ type local struct {
 }
 
 func main() {
+	// hostkit's helpers on a host, as a Phosphorus host's phosphorus answers them, so a
+	// sulfur on a host with no Phosphorus serves Sulfur there (hostkit.Login.Helper)
+	if len(os.Args) > 1 {
+		switch {
+		case os.Args[1] == "sulfur-language" && len(os.Args) == 3:
+			os.Exit(hostkit.LanguageMain(os.Args[2], os.Stdin, os.Stdout, os.Stderr))
+		case os.Args[1] == "sulfur-sqlite" && len(os.Args) == 2:
+			os.Exit(hostkit.SQLiteMain(os.Stdin, os.Stdout, os.Stderr))
+		}
+	}
 	trace("launched")
 	flag.Parse()
 	log.SetFlags(0)
@@ -163,17 +173,19 @@ func whoAmI() local {
 // --- the app's own settings: offline or which server ------------------------------
 
 type config struct {
-	Mode    string   `json:"mode"`
-	Server  string   `json:"server"`
+	Mode   string `json:"mode"`
+	Server string `json:"server"`
+	// Kind the remembered mesh's kind (mesh.go), none in an older file: Phosphorus
+	Kind    string   `json:"kind,omitempty"`
 	Servers []string `json:"servers"`
 }
 
 var (
 	cfgMu sync.Mutex
 	cfg   config
-	// the remembered mesh's proxy under /api/mesh/: its machines, agents and
-	// Forgejo beside this computer's own, never instead of them
-	link *httputil.ReverseProxy
+	// the remembered mesh's calls under /api/mesh/: its machines, and what else its
+	// kind gives, beside this computer's own, never instead of them
+	link http.Handler
 )
 
 func configPath() string {
@@ -195,7 +207,12 @@ func loadConfig() {
 	// one mode: this computer always, a mesh beside it (an older "mesh" pick so too)
 	cfg.Mode = "local"
 	if cfg.Server != "" {
-		link = meshProxy(cfg.Server, "/api/mesh")
+		if k, ok := meshKinds[kindOf(cfg.Kind)]; ok {
+			if server, err := k.Normalize(cfg.Server); err == nil {
+				cfg.Server = server
+				link = k.Handler(server)
+			}
+		}
 	}
 }
 
@@ -213,10 +230,17 @@ func sidecar(w http.ResponseWriter, r *http.Request) {
 		cfgMu.Lock()
 		c := cfg
 		cfgMu.Unlock()
-		send(w, 200, map[string]any{"app": "sulfur", "version": version, "mode": c.Mode, "server": c.Server, "servers": c.Servers,
-			"user": me.User, "host": me.Host, "platform": me.OS, "shell": me.Shell, "info": me.Info})
+		info := map[string]any{"app": "sulfur", "version": version, "mode": c.Mode, "server": c.Server, "servers": c.Servers,
+			"user": me.User, "host": me.Host, "platform": me.OS, "shell": me.Shell, "info": me.Info}
+		if c.Server != "" {
+			kind := kindOf(c.Kind)
+			if k, ok := meshKinds[kind]; ok {
+				info["mesh"] = k.Info(kind)
+			}
+		}
+		send(w, 200, info)
 	case r.URL.Path == "/api/sidecar/mode" && r.Method == "POST":
-		var p struct{ Mode, Server string }
+		var p struct{ Mode, Server, Kind string }
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&p) != nil {
 			send(w, 400, errB("bad request"))
 			return
@@ -225,18 +249,24 @@ func sidecar(w http.ResponseWriter, r *http.Request) {
 		case "local", "":
 			send(w, 200, map[string]any{"mode": "local"})
 		case "mesh", "link":
-			u, err := serverURL(p.Server)
+			kind := kindOf(p.Kind)
+			k, ok := meshKinds[kind]
+			if !ok {
+				send(w, 400, errB("Sulfur doesn't know a "+kind+" mesh"))
+				return
+			}
+			server, err := k.Normalize(p.Server)
 			if err != nil {
 				send(w, 400, errB(err.Error()))
 				return
 			}
-			if err := reach(u); err != nil {
+			if err := k.Reach(server); err != nil {
 				send(w, 502, errB(err.Error()))
 				return
 			}
 			cfgMu.Lock()
 			// the mesh remembered and reachable under /api/mesh/
-			cfg.Server = u.String()
+			cfg.Server = server
 			list := []string{cfg.Server}
 			for _, s := range cfg.Servers {
 				if s != cfg.Server && len(list) < 8 {
@@ -244,14 +274,15 @@ func sidecar(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			cfg.Servers = list
-			link = meshProxy(cfg.Server, "/api/mesh")
+			cfg.Kind = kind
+			link = k.Handler(cfg.Server)
 			err = saveConfig()
 			cfgMu.Unlock()
 			if err != nil {
 				send(w, 500, errB(err.Error()))
 				return
 			}
-			send(w, 200, map[string]any{"mode": cfg.Mode, "server": u.String()})
+			send(w, 200, map[string]any{"mode": "local", "server": server, "mesh": k.Info(kind)})
 		default:
 			send(w, 400, errB("use link to connect a mesh"))
 		}
@@ -267,7 +298,7 @@ func sidecar(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg.Servers = out
 		if cfg.Server == p.Server {
-			cfg.Server, link = "", nil
+			cfg.Server, cfg.Kind, link = "", "", nil
 		}
 		saveConfig()
 		cfgMu.Unlock()
@@ -434,7 +465,7 @@ func localAPI(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/model/v1/models":
 		send(w, 200, map[string]any{"data": []any{}})
 	case path == "/api/sulfur/toolchains":
-		t, err := sulfur.ProbeLocal(q.Get("fresh") != "")
+		t, err := hostkit.ProbeLocal(q.Get("fresh") != "")
 		if err != nil {
 			send(w, 502, errB(err.Error()))
 			return
@@ -443,17 +474,17 @@ func localAPI(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, t)
 	case path == "/api/sulfur/languages":
 		if ws := accept(w, r); ws != nil {
-			sulfur.LanguageSocket(ws, "", code.Creds{})
+			hostkit.LanguageSocket(ws, "", hostkit.Login{})
 		}
 	case path == "/api/sulfur/vsx/search" || path == "/api/sulfur/vsx/convert":
-		sulfur.VSXServe(w, r)
+		hostkit.VSXServe(w, r)
 	case path == "/api/sulfur/sqlite" && r.Method == "POST":
-		var p sulfur.SQLiteRequest
+		var p hostkit.SQLiteRequest
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, (1<<20)+4096)).Decode(&p) != nil {
 			send(w, 400, errB("invalid SQLite request"))
 			return
 		}
-		res, err := sulfur.SQLiteLocal(r.Context(), p)
+		res, err := hostkit.SQLiteLocal(r.Context(), p)
 		if err != nil {
 			send(w, 400, errB(err.Error()))
 			return
@@ -461,9 +492,9 @@ func localAPI(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, res)
 	case path == "/api/sulfur/git" && r.Method == "POST":
 		var p struct {
-			Dir   string           `json:"dir"`
-			Args  []string         `json:"args"`
-			Creds *sulfur.GitCreds `json:"creds"`
+			Dir   string            `json:"dir"`
+			Args  []string          `json:"args"`
+			Creds *hostkit.GitCreds `json:"creds"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&p) != nil {
 			send(w, 400, errB("bad request"))
@@ -473,7 +504,7 @@ func localAPI(w http.ResponseWriter, r *http.Request) {
 			send(w, 400, errB("a full path to the folder"))
 			return
 		}
-		res, err := sulfur.GitLocal(p.Dir, p.Args, p.Creds)
+		res, err := hostkit.GitLocal(p.Dir, p.Args, p.Creds)
 		if err != nil {
 			send(w, 502, map[string]any{"error": err.Error(), "out": res.Out, "err": res.Err})
 			return

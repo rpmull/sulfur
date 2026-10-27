@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pmghartman/phosphorus/internal/sulfur"
-	"github.com/pmghartman/phosphorus/internal/wsock"
+	"github.com/pmghartman/sulfur/hostkit"
+	"github.com/pmghartman/sulfur/internal/wsock"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 // kept so a reloaded page picks up where it was
 type termSession struct {
 	mu    sync.Mutex
-	l     *sulfur.Local
+	l     *hostkit.Local
 	buf   []byte
 	total int64
 	ws    *wsock.Conn
@@ -123,7 +123,7 @@ func terminal(ws *wsock.Conn, sid string, since int64, auto bool) {
 				line = m.Run
 			}
 			if s != nil && line != "" {
-				go func(l *sulfur.Local, line string) { time.Sleep(250 * time.Millisecond); l.Input([]byte(line + "\r")) }(s.l, line)
+				go func(l *hostkit.Local, line string) { time.Sleep(250 * time.Millisecond); l.Input([]byte(line + "\r")) }(s.l, line)
 			}
 		case "close":
 			if s != nil {
@@ -138,7 +138,7 @@ func terminal(ws *wsock.Conn, sid string, since int64, auto bool) {
 
 func startShell(sid, dir string, cols, rows int) (*termSession, error) {
 	s := &termSession{}
-	l, wait, err := sulfur.StartShell(dir, cols, rows, s)
+	l, wait, err := hostkit.StartShell(dir, cols, rows, s)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +221,7 @@ func runTask(ws *wsock.Conn) {
 		return
 	}
 	var p struct {
-		Task sulfur.Task `json:"task"`
+		Task hostkit.Task `json:"task"`
 	}
 	fail := func(e string) {
 		ws.JSON(map[string]any{"type": "exit", "code": -1, "error": e})
@@ -231,7 +231,7 @@ func runTask(ws *wsock.Conn) {
 		fail("bad task")
 		return
 	}
-	run, wait, err := sulfur.StartLocal(p.Task, &streamOut{ws: ws})
+	run, wait, err := hostkit.StartLocal(p.Task, &streamOut{ws: ws})
 	if err != nil {
 		fail(err.Error())
 		return

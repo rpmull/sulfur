@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pmghartman/phosphorus/internal/minisign"
+	"github.com/pmghartman/sulfur/internal/minisign"
 )
 
 // Release one feed file: the newest version for a target, its file and signature

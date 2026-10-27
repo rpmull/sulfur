@@ -5,6 +5,7 @@
 // merged home and logins, through the same API). Its boot functions are main.js's.
 
 import { themeFromStorage } from '../theme.js';
+import { meshPeers } from './mesh.js';
 
 // the page's vendor files, hashed by the build
 export const ASSETS = __ASSETS__;
@@ -236,6 +237,7 @@ export function bootLocal(info) {
   standalone.mode = 'local';
   standalone.meshChecking = !!info.server;
   standalone.info = info;
+  standalone.mesh = info.mesh || null;
   standalone.server = info.server || '';
   standalone.servers = info.servers || [];
   standalone.localHost = info.host;
@@ -267,6 +269,7 @@ export async function bootMesh(server, info = null) {
   standalone.mode = 'mesh';
   standalone.server = server;
   standalone.info = info;
+  standalone.mesh = info?.mesh || null;
   standalone.servers = info?.servers || [];
   const me = await getJSON('/api/me');
   if (me.status === 401 || !me.ok || me.boot) return null;
@@ -299,7 +302,7 @@ export async function bootMesh(server, info = null) {
         try { st = JSON.parse(ev.data); } catch { return; }
         selfHost = st.self?.host || selfHost;
         hostsInfo = st.hosts && typeof st.hosts === 'object' ? st.hosts : hostsInfo;
-        meshHosts = (st.tailnet || []).filter((d) => d.phosphorus).map((d) => d.name).sort();
+        meshHosts = meshPeers(st);
         local();
         if (first) { first = false; resolve(); }
       };
@@ -401,7 +404,7 @@ function linkMesh() {
     ws.onmessage = (ev) => {
       let st;
       try { st = JSON.parse(ev.data); } catch { return; }
-      const hs = (st.tailnet || []).filter((d) => d.phosphorus && d.name !== selfHost).map((d) => d.name).sort();
+      const hs = meshPeers(st).filter((h) => h !== selfHost);
       const was = linkHosts.join('\n');
       linkHosts = hs;
       for (const h of hs) if (st.hosts?.[h]) hostsInfo[h] = st.hosts[h];
@@ -438,11 +441,12 @@ export async function meshLogOut() {
   unlinkHosts();
 }
 // the app's own server told: link (remember a mesh, stay offline), mesh (work on it), local
-export async function sidecarMode(mode, server = '') {
-  const r = await getJSON('/api/sidecar/mode', jsonPost({ mode, server }));
+export async function sidecarMode(mode, server = '', kind = standalone.mesh?.kind || 'phosphorus') {
+  const r = await getJSON('/api/sidecar/mode', jsonPost({ mode, server, kind }));
   if (r.ok && r.server !== undefined) {
     if (r.server !== standalone.server) { unlinkHosts(); standalone.meshUser = ''; standalone.meshVault = null; }
     standalone.server = r.server;
+    standalone.mesh = r.mesh || null;
   }
   return r;
 }
@@ -451,3 +455,7 @@ standalone.meshMe = meshMe;
 standalone.meshLogIn = meshLogIn;
 standalone.meshLogOut = meshLogOut;
 standalone.sidecarMode = sidecarMode;
+
+// the page's theme and terminals, Sulfur's own here (the desktop gives its own instead)
+export { LOOK_IDS, PALETTES, PALETTE_EVENT, lookNow, paletteNow, setPalette } from '../theme.js';
+export { startTerminal, taskTerminal, termsRetheme } from '../apps/terminal.js';

@@ -1,7 +1,6 @@
-// licenses: THIRD_PARTY_LICENSES.txt, every license text phosphorus ships
-// or fetches, one copy per distinct text. Go modules of every OS's binary,
-// the menu bar app's included, the web client's npm packages (go generate
-// ./internal/web first) and the pinned tools. Run from the repo root: go run ./cmd/licenses
+// licenses: THIRD_PARTY_LICENSES.txt, every license text sulfur ships, one
+// copy per distinct text: Go modules of every OS's binary and the page's npm
+// packages (go generate ./internal/web first). Run from the repo root: go run ./cmd/licenses
 package main
 
 import (
@@ -37,7 +36,6 @@ func main() {
 	log.SetPrefix("[licenses] ")
 	parts := goParts()
 	parts = append(parts, webParts()...)
-	parts = append(parts, toolParts()...)
 	must(os.WriteFile(*out, render(parts), 0o644))
 	log.Printf("%d components into %s", len(parts), *out)
 }
@@ -78,8 +76,8 @@ func filesIn(dir string) []string {
 func goParts() []part {
 	seen := map[string]part{}
 	for _, t := range [][2]string{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "arm64"}, {"darwin", "amd64"}, {"windows", "amd64"}} {
-		b := run([]string{"GOOS=" + t[0], "GOARCH=" + t[1], "CGO_ENABLED=0"}, "go", "list", "-deps",
-			"-f", "{{with .Module}}{{if not .Main}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}{{end}}", "./cmd/phosphorus", "./cmd/tray", "./cmd/sulfur")
+		b := run([]string{"GOOS=" + t[0], "GOARCH=" + t[1], "CGO_ENABLED=0"}, "go", "list", "-buildvcs=false", "-deps",
+			"-f", "{{with .Module}}{{if not .Main}}{{.Path}}\t{{.Version}}\t{{.Dir}}{{end}}{{end}}", "./cmd/sulfur")
 		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 			f := strings.Split(l, "\t")
 			if len(f) != 3 || seen[f[0]].name != "" {
@@ -89,13 +87,13 @@ func goParts() []part {
 			if len(texts) == 0 {
 				log.Fatalf("go module %s has no license file in %s", f[0], f[2])
 			}
-			seen[f[0]] = part{group: "Go modules in the phosphorus binary", name: f[0], version: f[1], source: "https://pkg.go.dev/" + f[0], texts: texts}
+			seen[f[0]] = part{group: "Go modules in the sulfur binary", name: f[0], version: f[1], source: "https://pkg.go.dev/" + f[0], texts: texts}
 		}
 	}
 	root := strings.TrimSpace(string(run(nil, "go", "env", "GOROOT")))
 	// go.mod's version, not the installed toolchain's, so any machine and ci write the same file
-	ver := "go" + strings.TrimSpace(string(run(nil, "go", "list", "-m", "-f", "{{.GoVersion}}")))
-	parts := []part{{group: "Go modules in the phosphorus binary", name: "Go standard library and runtime", version: ver, source: "https://go.dev", texts: filesIn(root)}}
+	ver := "go" + strings.TrimSpace(string(run(nil, "go", "list", "-m", "-f", "{{.GoVersion}}", "github.com/pmghartman/sulfur")))
+	parts := []part{{group: "Go modules in the sulfur binary", name: "Go standard library and runtime", version: ver, source: "https://go.dev", texts: filesIn(root)}}
 	for _, p := range seen {
 		parts = append(parts, p)
 	}
@@ -154,24 +152,6 @@ func fetch(url string) string {
 	}
 }
 
-func toolParts() []part {
-	ts := pinned("packaging/tools.sh", `(?m)^TAILSCALE=(\S+)`)
-	cf := pinned("packaging/tools.sh", `(?m)^CLOUDFLARED=(\S+)`)
-	fj := pinned("packaging/tools.sh", `(?m)^FORGEJO=(\S+)`)
-	ll := pinned("internal/tools/tools.go", `LlamaTag\s*=\s*"([^"]+)"`)
-	bundled, fetched := "Programs bundled with the host installers", "Programs a model host downloads at run time"
-	return []part{
-		{group: bundled, name: "Tailscale", version: ts, source: "https://github.com/tailscale/tailscale",
-			texts: []string{fetch("https://raw.githubusercontent.com/tailscale/tailscale/v" + ts + "/LICENSE")}},
-		{group: bundled, name: "cloudflared", version: cf, source: "https://github.com/cloudflare/cloudflared",
-			texts: []string{fetch("https://raw.githubusercontent.com/cloudflare/cloudflared/" + cf + "/LICENSE")}},
-		{group: bundled, name: "Forgejo", version: fj, source: "https://codeberg.org/forgejo/forgejo/src/tag/v" + fj,
-			texts: []string{fetch("https://codeberg.org/forgejo/forgejo/raw/tag/v" + fj + "/LICENSE")}},
-		{group: fetched, name: "llama.cpp", version: ll, source: "https://github.com/ggml-org/llama.cpp",
-			texts: []string{fetch("https://raw.githubusercontent.com/ggml-org/llama.cpp/" + ll + "/LICENSE")}},
-	}
-}
-
 // spdxTag the SPDX license list release the appendix's texts come from
 const spdxTag = "v3.27.0"
 
@@ -196,8 +176,7 @@ func norm(s string) string {
 // render each component under its group, then each distinct text once with
 // every component it covers
 func render(parts []part) []byte {
-	groups := []string{"Go modules in the phosphorus binary", "npm packages in the web client",
-		"Programs bundled with the host installers", "Programs a model host downloads at run time"}
+	groups := []string{"Go modules in the sulfur binary", "npm packages in the web client"}
 	sort.Slice(parts, func(i, j int) bool {
 		if parts[i].group != parts[j].group {
 			return parts[i].group < parts[j].group
@@ -232,11 +211,7 @@ func render(parts []part) []byte {
 		x.id = i + 1
 	}
 	var b bytes.Buffer
-	fj := pinned("packaging/tools.sh", `(?m)^FORGEJO=(\S+)`)
-	b.WriteString("Third-party licenses\n\nGenerated by go run ./cmd/licenses. Each component below stays under its own\nlicense; the phosphorus license (LICENSE) covers none of them. Components are\nlisted by group, then every distinct license text follows once, with the\ncomponents it covers.\n\n" +
-		"Forgejo runs as a separate, unmodified program; phosphorus only writes its\nconfiguration. Its complete corresponding source, forgejo-src-" + fj + ".tar.gz, is at:\nhttps://codeberg.org/forgejo/forgejo/releases/download/v" + fj + "/forgejo-src-" + fj + ".tar.gz\n\n" +
-		"With [model] gpu on an nvidia gpu, the model host also downloads NVIDIA's CUDA\nruntime from llama.cpp's releases, under the NVIDIA CUDA EULA\n(https://docs.nvidia.com/cuda/eula/). phosphorus ships no model; a model's\nweights come under its own license.\n\n" +
-		"Cloudflare, Forgejo and Tailscale are trademarks of their respective owners;\nphosphorus is not affiliated with or endorsed by any of them.\n")
+	b.WriteString("Third-party licenses\n\nGenerated by go run ./cmd/licenses. Each component below stays under its own\nlicense; the sulfur license (LICENSE) covers none of them. Components are\nlisted by group, then every distinct license text follows once, with the\ncomponents it covers.\n")
 	for _, g := range groups {
 		b.WriteString("\n\n== " + g + " ==\n\n")
 		for _, p := range parts {

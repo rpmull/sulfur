@@ -62,12 +62,13 @@ import { createInlineCompletions, completionModels } from './inline-completion.j
 import { diagnosticCounts, diagnosticSeverity } from './diagnostics.js';
 import { isSQLiteFile, sqliteProjectPath, mountSQLite } from './sqlite.js';
 import { createBuildProblemMatcher } from './build-problems.js';
-import { startTerminal, taskTerminal, termsRetheme } from '../apps/terminal.js';
+import { startTerminal, taskTerminal, termsRetheme } from '#host';
 import { renderMd } from '../md.js';
 import { symbolsFor, identifierAt, enclosingSymbol } from '../symbols.js';
 import { singleFileCommand, configsFor } from './build-commands.js';
+import { supportsMesh } from './mesh.js';
 import { cmakeTargets, cmakeConfiguration, targetForFile, executableCommand, absolutePath, joinPath } from './project-targets.js';
-import { LOOK_IDS, PALETTES, PALETTE_EVENT, lookNow, paletteNow, setPalette } from '../theme.js';
+import { LOOK_IDS, PALETTES, PALETTE_EVENT, lookNow, paletteNow, setPalette } from '#host';
 import guideText from '../../../docs/sulfur-extensions.md';
 
 // --- sulfur, the code editor ----------------------------------------------------------
@@ -250,6 +251,7 @@ const localDesktop = () => standalone?.mode === 'local';
 const meshApi = (path) => (standalone?.meshUrl ? standalone.meshUrl(path) : path);
 // offline with a mesh logged into: its models, agents and Forgejo here too
 const meshLinked = () => localDesktop() && !!standalone.meshUser;
+const meshHas = (capability) => supportsMesh(standalone, capability);
 // the remembered mesh not yet answered: nothing asks to log in or connect while it's asked
 const meshChecking = () => localDesktop() && !!standalone.meshChecking;
 // a place on the computer Sulfur's running on, not a mesh machine: offline all of them,
@@ -440,7 +442,7 @@ const languages = createLanguageWorkbench({
 });
 
 const inlineCompletions = createInlineCompletions({
-  setting: (key) => setting(key), available: () => !localDesktop() || meshLinked(),
+  setting: (key) => setting(key), available: () => meshHas('models') && (!localDesktop() || meshLinked()),
   alive: (t) => !!I && I.active === t && I.tabs.includes(t),
   url: () => meshApi('/api/model/v1/messages'),
   scope: (t) => [acct.user, standalone?.meshUser, standalone?.server, wsKey(), locKey(t.loc)],
@@ -3640,10 +3642,10 @@ function registerCommands() {
   C('sulfur.git.sync', 'Git: Sync', () => scmSync(), { category: 'Git' });
   C('sulfur.git.history', 'Git: View History…', () => scmHistory(), { category: 'Git' });
   C('sulfur.git.graph', 'Git: Open Source Control Graph', () => scmHistory(), { category: 'Git' });
-  C('sulfur.forgejo.open', 'Forgejo: Open on Forgejo', () => forgejoOpen(I.active?.rel), { category: 'Forgejo' });
-  C('sulfur.forgejo.pr', 'Forgejo: Create Pull Request…', () => forgejoPR(), { category: 'Forgejo' });
-  C('sulfur.forgejo.prs', 'Forgejo: Pull Requests…', () => forgejoPRs(), { category: 'Forgejo' });
-  C('sulfur.forgejo.publish', 'Forgejo: Publish Repository…', () => forgejoPublish(), { category: 'Forgejo' });
+  C('sulfur.forgejo.open', 'Forgejo: Open on Forgejo', () => forgejoOpen(I.active?.rel), { when: () => meshHas('forgejo'), category: 'Forgejo' });
+  C('sulfur.forgejo.pr', 'Forgejo: Create Pull Request…', () => forgejoPR(), { when: () => meshHas('forgejo'), category: 'Forgejo' });
+  C('sulfur.forgejo.prs', 'Forgejo: Pull Requests…', () => forgejoPRs(), { when: () => meshHas('forgejo'), category: 'Forgejo' });
+  C('sulfur.forgejo.publish', 'Forgejo: Publish Repository…', () => forgejoPublish(), { when: () => meshHas('forgejo'), category: 'Forgejo' });
   C('workbench.action.findInFiles', 'Search: Find in Files', () => findInFiles(), { key: 'ctrl+shift+h', category: 'Search', shell: true });
   C('workbench.view.run', 'Show Run and Build', () => showSide('run', true, true), { key: 'ctrl+shift+d', category: 'View', shell: true });
   C('workbench.view.extensions', 'Show Extensions', () => showSide('extensions', true, true), { key: 'ctrl+shift+x', category: 'View', shell: true });
@@ -3786,7 +3788,7 @@ function registerCommands() {
   C('sulfur.update', 'Check for Updates…', () => checkUpdate(true), { when: () => !!standalone?.app, category: 'Sulfur' });
   C('sulfur.about', 'About', () => ask({ title: 'Sulfur', detail: localDesktop()
     ? `Sulfur ${standalone.info?.version || ''} on ${selfHost}.\nUser: ${acct.user}\nHome: ${hostPath(selfHost, 'home', acct.user)}`
-    : `A VS Code-shaped workbench over your phosphorus home.\nUser: ${acct.user}\nServed by: ${selfHost}\nHosts online: ${homeOnline().join(', ')}\nTerminals on: ${dkLiveHosts().join(', ') || 'none logged into'}`, buttons: [{ label: 'OK', primary: true, value: 'ok' }] }), { category: 'Help' });
+    : `Sulfur over your mesh's files.\nUser: ${acct.user}\nServed by: ${selfHost}\nHosts online: ${homeOnline().join(', ')}\nTerminals on: ${dkLiveHosts().join(', ') || 'none logged into'}`, buttons: [{ label: 'OK', primary: true, value: 'ok' }] }), { category: 'Help' });
   // extensions
   C('sulfur.extensions.guide', 'Open the Extension Guide', () => openGuide(), { category: 'Extensions' });
   C('sulfur.extensions.create', 'Create New Extension…', () => createExtension(), { category: 'Extensions' });
@@ -5599,7 +5601,7 @@ const SEEN_MAX = 24000;
 // the gateway's roles and whether each has a model answering
 async function refreshRoles() {
   try {
-    if (localDesktop() && !meshLinked()) { I.roles = []; paintChat(); return; }
+    if (!meshHas('models') || (localDesktop() && !meshLinked())) { I.roles = []; paintChat(); return; }
     const r = await fetch(meshApi('/api/model/v1/models'), { cache: 'no-store' });
     const b = await r.json().catch(() => ({}));
     if (!I) return;
@@ -6122,6 +6124,7 @@ const chatModel = () => (['chimp', 'orangutan', ''].includes(I.st.aux.model) ? C
 const harnessName = (h) => harnessList().find((x) => x.id === h)?.label || h;
 
 async function codeCall(url, method = 'GET', body) {
+  if (!meshHas('agents')) throw new Error('This mesh does not provide coding agents');
   const init = { method, cache: 'no-store' };
   if (body !== undefined) { init.headers = { 'content-type': 'application/json' }; init.body = JSON.stringify(body); }
   const r = await fetch(meshApi(url), init);
@@ -7022,6 +7025,7 @@ function gitWhere() {
 
 // the mesh's Forgejo as you: its reply, and its domain and your name there kept
 async function forgejo(method, path, body) {
+  if (!meshHas('forgejo')) throw new Error('This mesh does not provide Forgejo');
   if (localDesktop() && !meshLinked()) throw new Error(standalone.server ? `log in to ${meshName()} for its Forgejo` : 'connect to a Phosphorus mesh for its Forgejo');
   const r = await fetch(meshApi('/api/sulfur/forgejo'), jsonPost({ method, path, body }));
   const b = await r.json().catch(() => ({}));
@@ -7586,7 +7590,7 @@ async function forgejoPRs() {
 async function gitClone() {
   let url = '';
   const items = [];
-  if (!localDesktop() || meshLinked()) {
+  if (meshHas('forgejo') && (!localDesktop() || meshLinked())) {
     try {
       const found = await forgejo('GET', '/repos/search?limit=50&sort=updated&order=desc');
       for (const x of found?.data || []) items.push({ label: x.full_name, description: x.description || '', detail: x.private ? 'private' : '', ic: 'branch', value: x.clone_url, sep: items.length ? '' : `${I.forgejo.host}` });

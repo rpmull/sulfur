@@ -1,11 +1,16 @@
-# manual release: per checked OS a host installer (.deb, .dmg, setup .exe), as
-# vVERSION, and with Sulfur checked the Sulfur code editor's own app for every OS
-# (one Go binary around the system's web view: setup .exe, .dmg and .deb);
-# feeds on release `update` for the hosts and Sulfur built, then only the two newest
-# releases and runs kept
-# app and apt feeds need UPDATE_SIGNING_KEY (go run ./cmd/feedsign -keygen), APT_GPG_KEY, var UPDATE_PUBKEY;
-# Windows' code signing vars AZURE_SIGNING_ENDPOINT/ACCOUNT/PROFILE and secrets AZURE_TENANT_ID/
-# CLIENT_ID/CLIENT_SECRET (Trusted Signing), or secrets WINDOWS_CERT_PFX/PASSWORD (packaging/winsign.sh)
+# manual release: Sulfur's app for every OS (one Go binary around the system's web view:
+# setup .exe, .dmg and .deb) as vVERSION, its update feed on release `update`, then only
+# the two newest releases and runs kept.
+#
+# The feed needs UPDATE_SIGNING_KEY and var UPDATE_PUBKEY: the same key Phosphorus's releases
+# signed Sulfur with, since that's the key every installed Sulfur checks. Windows' code signing
+# takes vars AZURE_SIGNING_ENDPOINT/ACCOUNT/PROFILE and secrets AZURE_TENANT_ID/CLIENT_ID/
+# CLIENT_SECRET (Trusted Signing), or secrets WINDOWS_CERT_PFX/PASSWORD.
+#
+# Sulfur apps installed before Sulfur had its own repository read their feed off Phosphorus's
+# `update` release. With secret PHOSPHORUS_FEED_TOKEN (contents: write on pmghartman/phosphorus),
+# each release writes its sulfur-*.json there too, pointing at this repository's files, so those
+# apps update onto this feed.
 name: release
 
 on:
@@ -15,34 +20,20 @@ on:
         description: "Bump Major Version"
         type: boolean
         default: false
-      linux_amd64:
-        description: "Linux amd64"
-        type: boolean
-        default: false
-      linux_arm64:
-        description: "Linux arm64"
-        type: boolean
-        default: false
-      macos:
-        description: "MacOS"
-        type: boolean
-        default: false
-      windows:
-        description: "Windows"
-        type: boolean
-        default: false
-      sulfur:
-        description: "Sulfur IDE"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
-# one release at a time: the next version is read off the tags
 concurrency:
   group: release
   cancel-in-progress: false
+
+env:
+  # Sulfur's last version released from Phosphorus's repository: versions here go on from it,
+  # so the apps that release installed take these as newer
+  FLOOR: "1.106"
+  # the repository whose `update` release older apps read their feed from
+  LEGACY_FEED_REPO: pmghartman/phosphorus
 
 jobs:
   version:
@@ -50,56 +41,21 @@ jobs:
     timeout-minutes: 5
     outputs:
       ver: ${{ steps.v.outputs.ver }}
-      builds: ${{ steps.plan.outputs.builds }}
-      sulfur: ${{ steps.plan.outputs.sulfur }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # every run one past the highest vMAJOR.MINOR tag: minor, or major with .0
+      # one past the highest vMAJOR.MINOR tag here, or past FLOOR: minor, or major with .0
       - name: next version
         id: v
         env:
           MAJOR: ${{ inputs.major }}
         run: |
-          L=$(git ls-remote --tags origin | sed -n 's|.*refs/tags/v\([0-9]*\.[0-9]*\)$|\1|p' | sort -t. -k1,1n -k2,2n | tail -1)
-          L=${L:-0.0}
+          L=$( { git ls-remote --tags origin | sed -n 's|.*refs/tags/v\([0-9]*\.[0-9]*\)$|\1|p'; echo "$FLOOR"; } | sort -t. -k1,1n -k2,2n | tail -1)
           if [ "$MAJOR" = true ]; then V=$(( ${L%.*} + 1 )).0
           else V=${L%.*}.$(( ${L#*.} + 1 ))
           fi
           echo "ver=$V" | tee -a "$GITHUB_OUTPUT"
-      - name: plan
-        id: plan
-        env:
-          AMD64: ${{ inputs.linux_amd64 }}
-          ARM64: ${{ inputs.linux_arm64 }}
-          MAC: ${{ inputs.macos }}
-          WIN: ${{ inputs.windows }}
-          SULFUR: ${{ inputs.sulfur }}
-        run: |
-          on() { for v in "$@"; do [ "$v" = true ] && return 0; done; return 1; }
-          on "$AMD64" "$ARM64" "$MAC" "$WIN" "$SULFUR" || { echo "check at least one OS, or Sulfur" >&2; exit 1; }
-          la='{"name":"linux-amd64","runner":"ubuntu-24.04","arch":"amd64"}'
-          lb='{"name":"linux-arm64","runner":"ubuntu-24.04-arm","arch":"arm64"}'
-          mc='{"name":"macos-universal","runner":"macos-14","arch":"universal"}'
-          wn='{"name":"windows-x86_64","runner":"windows-2022","arch":"amd64"}'
-          builds=()
-          [ "$AMD64" = true ] && builds+=("$la")
-          [ "$ARM64" = true ] && builds+=("$lb")
-          [ "$MAC" = true ] && builds+=("$mc")
-          [ "$WIN" = true ] && builds+=("$wn")
-          # an empty matrix fails its job: a placeholder the jobs' if skips
-          j() { [ $# -gt 0 ] || set -- '{"name":"none"}'; local IFS=,; echo "[$*]"; }
-          echo "builds=$(j "${builds[@]}")" | tee -a "$GITHUB_OUTPUT"
-          # Sulfur's app on every OS, whichever hosts were checked: built on a runner of its own, its window native
-          sulfur=()
-          if [ "$SULFUR" = true ]; then
-            sulfur+=('{"name":"linux-amd64","runner":"ubuntu-24.04","arch":"amd64"}')
-            sulfur+=('{"name":"linux-arm64","runner":"ubuntu-24.04-arm","arch":"arm64"}')
-            sulfur+=('{"name":"macos-universal","runner":"macos-14"}')
-            sulfur+=('{"name":"windows-x86_64","runner":"windows-2022"}')
-          fi
-          echo "sulfur=$(j "${sulfur[@]}")" | tee -a "$GITHUB_OUTPUT"
 
-  # the web client built once, from pinned npm tarballs, for every job that embeds it
+  # the page built once, from pinned npm tarballs, for every job that embeds it
   web:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -112,16 +68,15 @@ jobs:
         with:
           path: web/.vendor/cache
           key: web-vendor-${{ hashFiles('web/vendor.lock') }}
-      # a binary without it serves nothing but 404s; Sulfur's page in it too
-      - run: go generate ./internal/web && test -f internal/web/dist/index.html && test -f internal/web/dist/sulfur/index.html
+      # a binary without it serves nothing but 404s
+      - run: go generate ./internal/web && test -f internal/web/dist/sulfur/index.html
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: web-dist
           path: internal/web/dist/
           retention-days: 1
 
-  # the shipped license texts current with every dependency and pinned tool, beside the
-  # builds, not before them; needs the npm packages, so the web build's cache
+  # the shipped license texts current with every dependency; needs the npm packages
   licenses:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -140,137 +95,43 @@ jobs:
           go run ./cmd/licenses
           git diff --exit-code THIRD_PARTY_LICENSES.txt || { echo "THIRD_PARTY_LICENSES.txt is stale, run make licenses and commit it" >&2; exit 1; }
 
-  # vet and tests gating the release, a job per target in parallel; no web client or
-  # cgo needed, Sulfur's window compiled by its own build
+  # vet and tests gating the release; the page's own tests on node
   check:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: linux, goos: linux }
-          - { name: darwin, goos: darwin }
-          - { name: windows, goos: windows }
-    name: check (${{ matrix.name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    needs: web
     env:
       CGO_ENABLED: 0
-      GOOS: ${{ matrix.goos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      # tests' own vet off, run above; packages with no tests not listed
-      - run: |
-          set -o pipefail
-          go vet ./...
-          if [ "$GOOS" = linux ]; then go test -vet=off ./... | awk '!/no test files/'; fi
-
-  # one job per OS, Go alone: Linux's host the .deb around the binary, macOS's
-  # and Windows' the menu bar app beside it, in a .dmg and a setup .exe
-  build:
-    needs: [version, web]
-    if: ${{ inputs.linux_amd64 || inputs.linux_arm64 || inputs.macos || inputs.windows }}
-    strategy:
-      # one OS's failure leaves the others' builds, and their caches, finished
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.version.outputs.builds) }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    env:
-      VER: ${{ needs.version.outputs.ver }}
-      APP: packaging/host
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: go.mod
-      # apt key's public half, into the host package
-      - name: apt key
-        if: startsWith(matrix.name, 'linux')
-        env:
-          KEY: ${{ secrets.APT_GPG_KEY }}
-        run: |
-          [ -n "$KEY" ] || exit 0
-          export GNUPGHOME=$(mktemp -d)
-          echo "$KEY" | gpg --batch --import
-          gpg --export > "$RUNNER_TEMP/phosphorus.gpg"
-          echo "PHOSPHORUS_APT_KEY=$RUNNER_TEMP/phosphorus.gpg" >> "$GITHUB_ENV"
-      # the web client the web job built, into internal/web/dist before anything embeds it
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: web-dist
           path: internal/web/dist
-      # the release's tree (.github and packaging export-ignored) and its bundled tools;
-      # Linux's packaged at once, the tools fetched beside the Go build
-      - name: host binary
-        shell: bash
-        run: |
-          mkdir -p out upd art $APP/payload
-          git archive HEAD | tar -x -C $APP/payload && echo "$VER" > $APP/payload/VERSION
-          b() { CGO_ENABLED=0 GOOS=$1 GOARCH=$2 go build -trimpath -ldflags "-s -w" -o "$3" ./cmd/phosphorus; }
-          case "${{ matrix.name }}" in
-            linux-*)
-              packaging/tools.sh linux ${{ matrix.arch }} art/tools > art/tools.log 2>&1 & t=$!
-              b linux ${{ matrix.arch }} art/phosphorus
-              wait $t || { cat art/tools.log; exit 1; }
-              packaging/deb/build.sh "out/phosphorus_${VER}_${{ matrix.arch }}.deb" "$VER" $APP/payload ${{ matrix.arch }} art/phosphorus art/tools ;;
-            macos-universal)
-              packaging/tools.sh darwin universal $APP/payload/tools > art/tools.log 2>&1 || { cat art/tools.log; exit 1; } ;;
-            windows-*)
-              packaging/tools.sh windows amd64 $APP/payload/tools > art/tools.log 2>&1 || { cat art/tools.log; exit 1; } ;;
-          esac
-      # the menu bar app around the host binary and release; its own update, signed
-      # for the feed, only with the signing key
-      - name: host app
-        if: ${{ !startsWith(matrix.name, 'linux') }}
-        shell: bash
-        env:
-          FEED_URL: https://github.com/${{ github.repository }}/releases/download/update
-          FEED_PUBKEY: ${{ vars.UPDATE_PUBKEY }}
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-          # Authenticode for the Windows .exes (packaging/winsign.sh): Trusted Signing's account
-          # (vars) and the app registration it signs as (secrets), or a .pfx certificate
-          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
-          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
-        run: |
-          if [ "${{ matrix.name }}" = macos-universal ]; then
-            $APP/macos.sh "$VER" $APP/payload out upd
-          else
-            $APP/windows.sh "$VER" "$PWD/$APP/payload" "$PWD/out" "$PWD/upd"
-          fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - run: test -z "$(gofmt -l cmd hostkit internal)" || { gofmt -l cmd hostkit internal; exit 1; }
+      - run: go vet ./... && GOOS=darwin go vet ./... && GOOS=windows go vet ./... && go test ./...
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          name: out-${{ matrix.name }}
-          path: out/
-          compression-level: 0
-          retention-days: 1
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: upd-${{ matrix.name }}
-          path: upd/
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: ignore
+          path: web/.vendor/cache
+          key: web-vendor-${{ hashFiles('web/vendor.lock') }}
+      # the tests import the page's npm packages as node does: the build's own, linked in
+      - run: go generate ./internal/web && ln -s .vendor/node_modules web/node_modules && node --test web/tests/*.test.mjs
 
-  # Sulfur's own app: one Go binary, its server and its window in one, on the system's
+  # the app on every OS: one Go binary, its server and its window in one, on the system's
   # web view; installers for every OS, each built on its own, as cgo draws the window
   sulfur:
     needs: [version, web]
-    if: ${{ inputs.sulfur }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.version.outputs.sulfur) }}
+        include:
+          - { name: linux-amd64, runner: ubuntu-24.04, arch: amd64 }
+          - { name: linux-arm64, runner: ubuntu-24.04-arm, arch: arm64 }
+          - { name: macos-universal, runner: macos-14 }
+          - { name: windows-x86_64, runner: windows-2022 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
@@ -287,12 +148,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-      # the web client the web job built, into internal/web/dist before anything embeds it
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: web-dist
           path: internal/web/dist
-      # the .debs kept across releases: the runners' mirror has crawled at 70 kB/s for 15 minutes
+      # the .debs kept across releases: the runners' mirror can crawl
       - name: apt cache
         if: startsWith(matrix.name, 'linux')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
@@ -311,8 +171,6 @@ jobs:
       # the packages in out/ under the release's names, the app's own update, signed for the feed, in upd/
       - name: build
         env:
-          # Authenticode for the Windows .exes (packaging/winsign.sh): Trusted Signing's account
-          # (vars) and the app registration it signs as (secrets), or a .pfx certificate
           AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
@@ -346,8 +204,7 @@ jobs:
           if-no-files-found: ignore
 
   release:
-    needs: [version, licenses, check, build, sulfur]
-    # runs with unchecked OSes skipped, not when anything failed
+    needs: [version, licenses, check, sulfur]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -356,54 +213,34 @@ jobs:
     env:
       VER: ${{ needs.version.outputs.ver }}
     steps:
-      # tools.sh alone, for the pinned Forgejo version the notes link the source of
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          sparse-checkout: packaging/tools.sh
-          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: out
           pattern: out-*
           merge-multiple: true
-      # the notes: how to install, the assets listed by GitHub under them
       - name: notes
         run: |
-          FJ=$(sed -n 's/^FORGEJO=//p' packaging/tools.sh)
-          cd out
           {
-            shopt -s nullglob
-            # the install steps, each OS's only when built
-            echo "You need a [Tailscale](https://tailscale.com) account and a reusable auth key."
+            echo "Sulfur, the code editor, on its own, for any computer: **Start Offline** for its own files, terminals and compilers, or link a mesh for its machines (a [Phosphorus](https://github.com/pmghartman/phosphorus) mesh also gives its agents, models and Forgejo)."
             echo
-            step() { echo "- $1"; }
-            [ -e phosphorus-$VER-macos-universal.dmg ] && step "**macOS:** open the \`.dmg\`, drag Phosphorus to Applications, open it (first time: right-click, Open). It lives in the menu bar."
-            [ -e phosphorus-$VER-windows-x86_64-setup.exe ] && step "**Windows:** run the setup \`.exe\` (SmartScreen: More info, Run anyway). It lives in the tray."
-            ls phosphorus_${VER}_*.deb >/dev/null 2>&1 && step "**Linux:** \`sudo apt install ./phosphorus_${VER}_ARCH.deb\`, then \`sudo phosphorus\`. It bundles Forgejo ${FJ} (GPL-3.0), source: [forgejo-src-${FJ}.tar.gz](https://codeberg.org/forgejo/forgejo/releases/download/v${FJ}/forgejo-src-${FJ}.tar.gz)."
+            echo "- **Windows:** run the \`sulfur-…-setup.exe\`."
+            echo "- **macOS:** open the \`.dmg\` (first time: right-click, Open)."
+            echo "- **Linux:** \`sudo apt install ./sulfur_${VER}_ARCH.deb\`."
             echo
-            echo "Then enter the Tailscale auth key when asked; every other host copies the rest from the mesh. Open \`http://HOST\` from any device on the tailnet, by a host's name or tailnet IP. The first login is \`admin\` with your admin password."
-            echo
-            echo "Installed hosts update themselves: **Check for Updates** in the menu bar or tray, \`phos update all\`, or the mesh update in the browser, every host at once."
-            # Sulfur's desktop app, when it was built
-            if ls sulfur[-_]* >/dev/null 2>&1; then
-              echo
-              echo "**Sulfur:** the code editor on its own, for any computer: **Start Offline** for its own files, terminals and compilers, or connect to your mesh for its machines and agents. Install the \`sulfur-…-setup.exe\`, the \`.dmg\` (first time: right-click, Open), or \`sudo apt install ./sulfur_${VER}_ARCH.deb\`. The Windows and Mac apps update themselves; the .deb updates with apt."
-            fi
+            echo "The Windows and Mac apps update themselves; the .deb updates with apt."
           } > "$RUNNER_TEMP/notes.md"
-          cat "$RUNNER_TEMP/notes.md"
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: v${{ env.VER }}
-          name: Phosphorus ${{ env.VER }}
+          name: Sulfur ${{ env.VER }}
           target_commitish: ${{ github.sha }}
           body_path: ${{ runner.temp }}/notes.md
           files: out/*
 
-  # the update feed beside the release, not after it: nothing in it waits on the numbered
-  # release's upload, and the upload nothing on it
+  # the update feed: this repository's own, and older apps' on Phosphorus's when the token's set
   feed:
-    needs: [version, licenses, check, build, sulfur]
-    if: ${{ !cancelled() && !failure() && (inputs.linux_amd64 || inputs.linux_arm64 || inputs.macos || inputs.windows || inputs.sulfur) }}
+    needs: [version, licenses, check, sulfur]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -411,68 +248,34 @@ jobs:
     env:
       VER: ${{ needs.version.outputs.ver }}
     steps:
-      # the .debs, for the apt index
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          path: out
-          pattern: out-*
-          merge-multiple: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: upd
           pattern: upd-*
           merge-multiple: true
-      # built OSes' files onto `update`; others: last release's. A release of Sulfur
-      # alone writes Sulfur's feed only, so no host's told of an update with nothing in it
       - name: update feed
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          KEY: ${{ secrets.APT_GPG_KEY }}
+          LEGACY_TOKEN: ${{ secrets.PHOSPHORUS_FEED_TOKEN }}
         run: |
           mkdir -p upd && cd upd
           BASE=https://github.com/$GH_REPO/releases/download/update
-          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          if ${{ inputs.linux_amd64 || inputs.linux_arm64 || inputs.macos || inputs.windows }}; then
-            printf '{"version":"%s","pub_date":"%s","notes":"https://github.com/%s/releases/tag/v%s"}\n' "$VER" "$NOW" "$GH_REPO" "$VER" > latest.json
-          fi
           feed() { printf '{"version":"%s","url":"%s/%s","signature":"%s"}\n' "$VER" "$BASE" "$2" "$(cat "$2.sig")" > "$1.json"; }
-          if [ -e phosphorus-macos-universal.app.tar.gz ]; then
-            feed darwin-x86_64 phosphorus-macos-universal.app.tar.gz
-            feed darwin-aarch64 phosphorus-macos-universal.app.tar.gz
-          fi
-          if [ -e phosphorus-windows-x86_64-setup.exe ]; then feed windows-x86_64 phosphorus-windows-x86_64-setup.exe; fi
-          # Sulfur's app: its own feed files beside the host's
           if [ -e sulfur-macos-universal.app.tar.gz ]; then
             feed sulfur-darwin-x86_64 sulfur-macos-universal.app.tar.gz
             feed sulfur-darwin-aarch64 sulfur-macos-universal.app.tar.gz
           fi
           if [ -e sulfur-windows-x86_64-setup.exe ]; then feed sulfur-windows-x86_64 sulfur-windows-x86_64-setup.exe; fi
-          # Linux hosts update over apt
-          # the apt feed: the host packages alone
-          if [ -n "$KEY" ] && ls ../out/phosphorus_*.deb >/dev/null 2>&1; then
-            command -v apt-ftparchive >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q apt-utils; }
-            # the unchecked arch's index kept from the last release
-            gh release download update -p 'Packages-*' || true
-            for f in ../out/phosphorus_*.deb; do
-              d=${f##*_}; d=${d%.deb} n=${f##*/}; n=${n%%_*}
-              mkdir -p "a-$d" && cp "$f" "a-$d/${n}_$d.deb"
-              (cd "a-$d" && apt-ftparchive packages .) > "Packages-$d"
-              mv "a-$d/${n}_$d.deb" . && rmdir "a-$d"
-            done
-            cat Packages-* > Packages
-            # agents' apt-get allows the Origin and Label change
-            apt-ftparchive -o APT::FTPArchive::Release::Origin=Phosphorus -o APT::FTPArchive::Release::Label=Phosphorus release . > "$RUNNER_TEMP/Release"
-            export GNUPGHOME=$(mktemp -d)
-            echo "$KEY" | gpg --batch --import
-            gpg --batch --yes --clearsign -o InRelease "$RUNNER_TEMP/Release"
-          fi
-          gh release view update >/dev/null 2>&1 || gh release create update --prerelease --latest=false --title "Update feed" --notes "Files installed hosts update from. Install from the numbered releases."
+          gh release view update >/dev/null 2>&1 || gh release create update --prerelease --latest=false --title "Update feed" --notes "Files installed Sulfur apps update from. Install from the numbered releases."
           gh release upload update * --clobber
+          # older apps' feed: the same json, its urls already this repository's
+          if [ -n "$LEGACY_TOKEN" ] && ls sulfur-*.json >/dev/null 2>&1; then
+            GH_TOKEN=$LEGACY_TOKEN gh release upload update sulfur-*.json --clobber --repo "$LEGACY_FEED_REPO"
+          fi
 
-  # only the two newest numbered releases and their tags kept, the `update` feed
-  # aside; only this workflow's two newest runs, this one included, and the apt
-  # caches those two saved
+  # only the two newest numbered releases and their tags kept, the `update` feed aside;
+  # only this workflow's two newest runs, and the apt caches those two saved
   prune:
     needs: [release, feed]
     if: ${{ !cancelled() && needs.release.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.feed.result) }}
