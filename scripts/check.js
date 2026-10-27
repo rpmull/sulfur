@@ -1,5 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { prepare } from './prepare.js';
+// Web sources import through the generated web/.vendor link, absent on a fresh checkout.
+await prepare();
 async function walk(dir) {
   const files = [];
   for (const e of await readdir(dir, { withFileTypes: true })) {
