@@ -4,7 +4,9 @@ const version = process.argv[2] || process.env.VERSION;
 if (!/^\d+\.\d+\.\d+$/.test(version || '')) throw new Error('Pass a three-part release version');
 const publicKey = process.env.SULFUR_UPDATE_PUBKEY?.trim();
 if (!publicKey || !process.env.TAURI_SIGNING_PRIVATE_KEY)
-  throw new Error('Release signing requires the existing Sulfur public and private update keys');
+  throw new Error(
+    'Release signing requires the Sulfur update key pair (free: bun tauri signer generate)',
+  );
 const keyBytes = Buffer.from(publicKey, 'base64');
 const normalizedKey = publicKey.startsWith('untrusted comment:')
   ? Buffer.from(publicKey).toString('base64')
@@ -38,5 +40,9 @@ if (process.platform === 'win32')
       args: [path.resolve('packaging/winsign.sh').replaceAll('\\', '/'), '%1'],
     },
   };
+// Without a Developer ID, ad-hoc signed: Apple Silicon runs nothing unsigned, and the user allows
+// the un-notarized app once in Privacy & Security
+if (process.platform === 'darwin' && !process.env.APPLE_SIGNING_IDENTITY)
+  release.bundle.macOS = { signingIdentity: '-' };
 await writeFile('src-tauri/tauri.release.conf.json', JSON.stringify(release, null, 2) + '\n');
 console.log(version);

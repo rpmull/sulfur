@@ -142,13 +142,19 @@ to the developer under `AGENTS.md`.
 
 The manual-only release workflow runs on five native targets. Pushing this branch
 does not build an app or publish a release. Its version is `1.0.<commit count>` of
-the dispatched commit, so a rerun of one commit releases the same version. It
-retains `UPDATE_SIGNING_KEY` and `UPDATE_PUBKEY`;
-set `UPDATE_SIGNING_PASSWORD` for an encrypted key. **Keep the existing public
-key**, since installed apps already trust it. Both old public-key input formats
-are normalized for Tauri. Windows Authenticode still uses the existing Trusted
-Signing/PFX variables and `packaging/winsign.sh`; Apple signing/notarization uses
-Tauri's documented Apple variables. Signed installers and signature files are
+the dispatched commit, so a rerun of one commit releases the same version.
+
+Update signing is required and free: secret `UPDATE_SIGNING_KEY` and variable
+`UPDATE_PUBKEY` are a minisign pair, such as the private key and `.pub` file from
+`bun tauri signer generate -w ~/.tauri/sulfur.key`; set `UPDATE_SIGNING_PASSWORD`
+when the key has one. **Keep the public key once published**, since installed apps
+trust only it. Both old public-key input formats are normalized for Tauri.
+
+Code signing is optional. Without Trusted Signing/PFX variables, `packaging/winsign.sh`
+leaves Windows installers unsigned (SmartScreen warns on first run) unless
+`WINDOWS_SIGNING_REQUIRED=1`. Without Tauri's Apple variables the macOS app is
+ad-hoc signed and not notarized: users allow it once, under System Settings → Privacy &
+Security → Open Anyway. Signed installers and signature files are
 published on the numbered release; `update` holds the compatible JSON manifests.
 `PHOSPHORUS_FEED_TOKEN` optionally mirrors those manifests to `LEGACY_FEED_REPO`.
 
