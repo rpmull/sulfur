@@ -56,17 +56,6 @@ go test ./...
 
 `packaging/sulfur/build.sh` makes this OS's installer.
 
-## Working beside Phosphorus
-
-This is a separate, local Git repository; it has not been published. Its module name is
-`github.com/pmghartman/sulfur`. Phosphorus currently uses a local `replace` in its `go.mod`
-pointing to `../sulfur`, so keep the two checkouts beside each other. Sulfur itself needs
-no Phosphorus checkout or running mesh. An optional `go.work` in Phosphorus's checkout
-(`go work init . ../sulfur`) includes both modules for editor tooling.
-Changes to `web/src/host/contract.js` or `hostkit`'s API are changes to the boundary; land
-them with Phosphorus's matching change (`docs/mesh-protocol.md`). When the repositories
-are published, remove Phosphorus's `replace` and pin an actual Sulfur release or commit.
-
 ## License
 
 Apache 2.0, see [`LICENSE`](LICENSE). Bundled software keeps its own license; full texts are in [`THIRD_PARTY_LICENSES.txt`](THIRD_PARTY_LICENSES.txt).
