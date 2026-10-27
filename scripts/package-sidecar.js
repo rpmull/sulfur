@@ -25,6 +25,8 @@ const result = await Bun.build({
     autoloadPackageJson: false,
   },
   minify: true,
+  // bytecode alone bundles as CommonJS, where the service's top-level await can't parse
+  format: 'esm',
   bytecode: true,
   define: {
     __SULFUR_COMPILED__: 'true',
