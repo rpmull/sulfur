@@ -9227,13 +9227,13 @@ async function activateExt(x) {
     vscode = { root: vs.root, id: vs.id, defaults: vs.defaults || {}, packageJSON, extensions: extensionRegistry(), state: { global: extState(x, 'global'), workspace: extState(x, 'workspace') }, dark: getComputedStyle(I.w.node).colorScheme !== 'light' };
   }
   if (vs?.runtime === 'bun') {
-    if (!standalone?.info?.nodeExtensions) { extFailed(x, 'This extension needs Sulfur’s desktop Bun host. Browser and Phosphorus-hosted pages can run its browser build when one is available.'); return x.activation; }
+    if (!standalone?.info?.nodeExtensions) { extFailed(x, 'This Node extension runs on Node.js: install Node.js 18 or newer on this computer’s PATH, then reload. Browser and Phosphorus-hosted pages run its browser build when one is available.'); return x.activation; }
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/sulfur/extensions/host`);
     const port = { postMessage: (value) => { if (ws.readyState === WebSocket.OPEN) ws.send(encodeExtensionMessage(value)); }, close: () => ws.close() };
     x.port = port;
     ws.addEventListener('open', () => { if (active()) port.postMessage({ t: 'init', context: { id: x.id, extensionPath: x.dir, user: acct.user, workspace: I.st.root, workspaceLocation: apiLoc(), host: selfHost, vscode } }); else ws.close(); });
     ws.addEventListener('message', (event) => { if (I === current && x.port === port) { try { extMessage(x, decodeExtensionMessage(event.data)); } catch (error) { extFailed(x, error.message); } } });
-    ws.addEventListener('close', () => { if (active()) extFailed(x, 'The Bun extension host stopped during activation'); });
+    ws.addEventListener('close', () => { if (active()) extFailed(x, 'The Node extension host stopped during activation'); });
     x.timer = setTimeout(() => { if (active()) extFailed(x, 'activate() didn’t finish within 15 seconds'); }, 15000);
     return x.activation;
   }

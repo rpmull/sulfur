@@ -235,6 +235,8 @@ export async function sidecarInfo() {
 // offline: this computer as the only host, its user the account
 export function bootLocal(info) {
   standalone.mode = 'local';
+  // Sulfur's own service leaves markdown to the page
+  globalThis.__sulfurMarkdownInPage = info.md === 'page';
   standalone.meshChecking = !!info.server;
   standalone.info = info;
   standalone.mesh = info.mesh || null;

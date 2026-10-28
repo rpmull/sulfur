@@ -1,6 +1,20 @@
 // markdown as the server renders it (marked, highlight.js, sanitize-html), the page
 // adding only katex for math, fetched on first use
 
+// Sulfur's own service leaves markdown to the page (md-render.js, loaded on first
+// use, once bootLocal has set the flag from the service's info); a Phosphorus
+// server renders it itself
+let pageRender = null;
+export async function mdRequest(body, signal) {
+  if (globalThis.__sulfurMarkdownInPage) {
+    pageRender ||= import('./md-render.js');
+    return (await pageRender).markdownResponse(body);
+  }
+  const r = await fetch('/api/md', { method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`markdown: ${r.status}`);
+  return r.json();
+}
+
 // the server's html for a text, by breaks and text
 const cache = new Map();
 const CACHE_MAX = 4000;
@@ -39,8 +53,7 @@ async function flush() {
   for (const q of batch) if (!seen.has(q.key)) { seen.set(q.key, items.length); items.push({ text: q.src, breaks: q.breaks }); }
   let out = [];
   try {
-    const r = await fetch('/api/md', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items }) });
-    if (r.ok) out = (await r.json()).html || [];
+    out = (await mdRequest({ items })).html || [];
   } catch {}
   for (const q of batch) {
     const html = out[seen.get(q.key)];
@@ -53,8 +66,7 @@ async function flush() {
 // a document's top-level blocks, each with where its source sits and its html
 export async function mdBlocks(text) {
   try {
-    const r = await fetch('/api/md', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, blocks: true }) });
-    if (r.ok) return (await r.json()).blocks || [];
+    return (await mdRequest({ text, blocks: true })).blocks || [];
   } catch {}
   return text ? [{ from: 0, raw: text, html: null }] : [];
 }

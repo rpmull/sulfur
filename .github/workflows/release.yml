@@ -4,6 +4,27 @@ name: release
 # releases as the same version, and each later commit as a higher one.
 on:
   workflow_dispatch:
+    inputs:
+      windows-x86_64:
+        description: Windows x64 (NSIS installer)
+        type: boolean
+        default: true
+      darwin-x86_64:
+        description: macOS Intel
+        type: boolean
+        default: true
+      darwin-aarch64:
+        description: macOS Apple Silicon
+        type: boolean
+        default: true
+      linux-x86_64:
+        description: Linux x64 (.deb, AppImage)
+        type: boolean
+        default: true
+      linux-aarch64:
+        description: Linux arm64 (.deb, AppImage)
+        type: boolean
+        default: true
 permissions:
   contents: read
 concurrency:
@@ -14,23 +35,36 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.count.outputs.version }}
+      targets: ${{ steps.targets.outputs.targets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - id: count
         run: echo "version=1.0.$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+      # only the platforms ticked when the run was started
+      - id: targets
+        env:
+          PICKED: ${{ toJSON(inputs) }}
+        run: |
+          targets=$(jq -c --argjson picked "$PICKED" '[.[] | select($picked[.name] == true)]' <<'JSON'
+          [
+            { "runner": "windows-2022", "name": "windows-x86_64" },
+            { "runner": "macos-15-intel", "name": "darwin-x86_64" },
+            { "runner": "macos-15", "name": "darwin-aarch64" },
+            { "runner": "ubuntu-24.04", "name": "linux-x86_64" },
+            { "runner": "ubuntu-24.04-arm", "name": "linux-aarch64" }
+          ]
+          JSON
+          )
+          if [ "$targets" = "[]" ]; then echo "::error::Pick at least one platform"; exit 1; fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
   app:
     needs: version
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { runner: windows-2022, name: windows-x86_64 }
-          - { runner: macos-15-intel, name: darwin-x86_64 }
-          - { runner: macos-15, name: darwin-aarch64 }
-          - { runner: ubuntu-24.04, name: linux-x86_64 }
-          - { runner: ubuntu-24.04-arm, name: linux-aarch64 }
+        include: ${{ fromJSON(needs.version.outputs.targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     defaults:
@@ -60,26 +94,10 @@ jobs:
       - name: native prerequisites
         if: startsWith(matrix.runner, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf libfuse2t64
-      # linuxdeploy asks ldd for every binary's libraries, and on arm64 ldd fails on the
-      # Bun-compiled service. That links only glibc, which an AppImage never bundles, so a
-      # failure for it reads as no libraries; every other file goes to the real ldd.
-      - name: ldd for the AppImage's Bun service
-        if: startsWith(matrix.runner, 'ubuntu')
-        run: |
-          mkdir -p "$RUNNER_TEMP/ldd"
-          cat > "$RUNNER_TEMP/ldd/ldd" <<'EOF'
-          #!/bin/sh
-          case "$*" in
-            *sulfur-service*) /usr/bin/ldd "$@" || echo "	statically linked"; exit 0 ;;
-          esac
-          exec /usr/bin/ldd "$@"
-          EOF
-          chmod +x "$RUNNER_TEMP/ldd/ldd"
-          echo "$RUNNER_TEMP/ldd" >> "$GITHUB_PATH"
       - name: Rust
         run: rustup update stable && rustup default stable
       - run: bun install --frozen-lockfile --ignore-scripts
-      - run: bun run check && bun test ./tests && bun run scripts/test-web.js
+      - run: bun run check && bun run test
       # Tauri takes an empty Apple variable as one that is set, so only those with values are
       # passed on; with none the app is ad-hoc signed and not notarized
       - name: Apple signing, when configured
@@ -134,8 +152,11 @@ jobs:
           path: out
       - name: numbered release
         run: |
-          printf 'Sulfur %s: Tauri desktop, Bun/JavaScript services, and compatible Phosphorus mesh and shared files.\n' "$VERSION" > notes.md
-          gh release create "v$VERSION" out/*.exe out/*.dmg out/*.deb out/*.AppImage out/*.tar.gz out/*.sig out/LICENSE out/THIRD_PARTY_LICENSES.txt --target "${{ github.sha }}" --title "Sulfur $VERSION" --notes-file notes.md
+          printf 'Sulfur %s: one native app with its service in process, and compatible Phosphorus mesh and shared files.\n' "$VERSION" > notes.md
+          # a run of some platforms publishes what they built
+          shopt -s nullglob
+          files=(out/*.exe out/*.dmg out/*.deb out/*.AppImage out/*.tar.gz out/*.sig out/LICENSE out/THIRD_PARTY_LICENSES.txt)
+          gh release create "v$VERSION" "${files[@]}" --target "${{ github.sha }}" --title "Sulfur $VERSION" --notes-file notes.md
       - name: update feeds (retain the existing signing key)
         run: |
           gh release view update >/dev/null 2>&1 || gh release create update --prerelease --latest=false --title 'Update feed' --notes 'Signed Sulfur update manifests.'

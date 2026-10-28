@@ -1,11 +1,15 @@
-import { mkdir, rm, readFile, writeFile, cp, readdir } from 'node:fs/promises';
+import { mkdir, rm, readFile, writeFile, cp } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { prepare } from './prepare.js';
 import { themeCSS } from './themes.js';
 await prepare();
 const out = path.resolve('dist');
+// whole each time: the service compresses everything here into the app
+await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
+// source maps only when asked for: they'd double what the app carries
+const sourcemap = process.env.SULFUR_SOURCEMAP ? 'external' : 'none';
 const assets = {};
 for (const [key, file] of Object.entries({
   'xterm.css': '@xterm/xterm/css/xterm.css',
@@ -20,7 +24,11 @@ for (const [key, file] of Object.entries({
   await writeFile(path.join(out, 'vendor', name), data);
   assets[key] = `/vendor/${name}`;
 }
-await cp('node_modules/katex/dist/fonts', path.join(out, 'vendor/fonts'), { recursive: true });
+// every webview Sulfur runs in reads WOFF2, the first source KaTeX's stylesheet names
+await cp('node_modules/katex/dist/fonts', path.join(out, 'vendor/fonts'), {
+  recursive: true,
+  filter: (file) => !/\.(woff|ttf)$/.test(file),
+});
 const host = path.resolve('web/src/sulfur/host.js');
 const generatedThemes = path.resolve('web/.vendor/themes.css');
 await writeFile(generatedThemes, themeCSS());
@@ -31,7 +39,7 @@ const result = await Bun.build({
   format: 'esm',
   splitting: true,
   minify: true,
-  sourcemap: 'external',
+  sourcemap,
   naming: {
     entry: '[name]-[hash].[ext]',
     chunk: '[name]-[hash].[ext]',
@@ -63,15 +71,15 @@ html = html
 await mkdir(path.join(out, 'sulfur'), { recursive: true });
 await writeFile(path.join(out, 'sulfur/index.html'), html);
 await cp('web/static', out, { recursive: true });
-async function compress(dir) {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) await compress(file);
-    else if (/\.(js|css|svg|html|json)$/.test(file)) {
-      const raw = await readFile(file);
-      await writeFile(file + '.gz', Bun.gzipSync(raw));
-    }
-  }
-}
-await compress(out);
+// a converted Node extension's process: run by the Node.js (or Bun) on PATH
+const extensionHost = await Bun.build({
+  entrypoints: ['server/extension-host.js'],
+  target: 'node',
+  format: 'esm',
+  minify: true,
+  sourcemap: 'none',
+  naming: 'sulfur-extension-host.mjs',
+  outdir: out,
+});
+if (!extensionHost.success) throw new AggregateError(extensionHost.logs, 'extension host build failed');
 console.log(`Built Sulfur web assets in ${out}`);

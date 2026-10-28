@@ -15,7 +15,7 @@ import {
   shareMenu,
 } from '#host';
 import { syntaxRanges, errorPositions, parserFor, parserNow, syntaxErrors, syntaxCache } from '../lezer.js';
-import { mdBlocks, renderMd } from '../md.js';
+import { mdBlocks, mdRequest, renderMd } from '../md.js';
 import { opApply, opTransform, opDiff, opMap, opEdits, commonEnds } from '../text-operations.js';
 import { EditorHistory } from '../editor-history.js';
 import { highlightRanges, rebaseHighlightRanges, rangesFromHighlight, classAt, rangeIndex } from './semantic-tokens.js';
@@ -1091,8 +1091,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     hlTimer = setTimeout(async () => {
       const controller = new AbortController(); hlAbort = controller;
       try {
-        const r = await fetch('/api/md', { method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ highlight: lang.hl, text }) });
-        const { html } = r.ok ? await r.json() : {};
+        const { html } = await mdRequest({ highlight: lang.hl, text }, controller.signal);
         // a reply for text since typed on still applies, moved onto the text now
         const ranges = !closed && typeof html === 'string' ? rangesFromHighlight(html, text) : null;
         if (ranges !== null) { lexical = ranges; lexicalText = text; lexicalDirty = null; hlApplied = text; redraw(true); }
