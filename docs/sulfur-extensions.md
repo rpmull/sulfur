@@ -288,6 +288,35 @@ The code service's harnesses (Claude Code, opencode) come from the mesh, each an
 
 `onDidRunFile(fn)` calls `fn({path, host})` each time a file is run.
 
+### api.notes
+
+`registerRenderer(name, fn, {inline, fence})` adds a [notes](sulfur-notes.md)
+plugin. In rendered markdown, inline code written `` `name: source` `` and fences
+written ` ```name ` are drawn from what `fn` resolves with. Pass `inline: false`
+or `fence: false` to take only one of them.
+
+```js
+fn({ kind, source, path }) // → Promise<string>
+```
+
+| field | meaning |
+|---|---|
+| `kind` | `'inline'` or `'fence'`. |
+| `source` | The code after `name:`, or the fence's text. |
+| `path` | The note's path, from the top of its place. |
+
+Resolve with markdown; it is rendered and sanitized as any note is, and an inline
+result loses its paragraph. Throw to mark the code as failed (hover it for why).
+A name is a letter followed by letters, digits, `-` and `_`; `mermaid`, `rng` and
+names another extension holds are refused.
+
+```js
+export function activate(api) {
+  // `upper: hello` → HELLO
+  api.notes.registerRenderer('upper', ({ source }) => `**${source.toUpperCase()}**`, { fence: false });
+}
+```
+
 ## Builds and tasks
 
 The desktop app always serves this computer. Connecting a mesh adds its machines, models, agents and Forgejo beside it. **Open Folder** and **Open File** use the same folder dialog, with local and mesh places together; a typed path works with Enter or the Open button. Losing the mesh does not prevent local editing, terminals or builds.

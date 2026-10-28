@@ -5,6 +5,10 @@ export const NATIVE_EXTENSIONS = [{
   manifest: { name: 'sqlite', displayName: 'SQLite', contributes: {
     customEditors: [{ viewType: 'sulfur.sqlite', filenamePatterns: ['*.sqlite', '*.sqlite3', '*.db', '*.db3'] }],
   } },
+}, {
+  // the notes plugin that rolls `rng: 2d6` and picks from ```rng tables (notes.js)
+  id: 'sulfur.notes-rng', native: true, active: true,
+  manifest: { name: 'notes-rng', displayName: 'Notes RNG', description: 'Dice, ranges, coin flips and picks from lists in rendered notes.', contributes: {} },
 }];
 
 const list = (value) => Array.isArray(value) ? value : [];

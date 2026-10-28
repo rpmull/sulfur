@@ -106,6 +106,39 @@
 }
 .md-add { margin-top: 0.8rem; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.75rem; cursor: pointer; }
 .md-add:hover { color: var(--accent); }
+.code-md .md-block { cursor: text; }
+/* notes: [[links]], #tags, ==highlights==, callouts, properties, embeds, diagrams, plugins */
+.md a.wikilink { color: var(--ide-link, var(--sky)); text-decoration: none; cursor: pointer; }
+.md a.wikilink:hover { text-decoration: underline; }
+.md a.wikilink.unresolved { opacity: 0.65; text-decoration: underline dotted; }
+.md .tag { padding: 0 0.45em; border-radius: 1em; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: 0.9em; cursor: pointer; }
+.md mark { padding: 0 0.15em; border-radius: 2px; background: color-mix(in srgb, var(--sand, #d7ba7d) 40%, transparent); color: inherit; }
+.md img { max-width: 100%; }
+.md img.unresolved { display: inline-block; padding: 0.2em 0.5em; border: 1px dashed var(--border); color: var(--muted); font-size: 0.85em; }
+.md .callout { --callout: var(--sky, #569cd6); margin: 0.5em 0 0; padding: 0.45em 0.8em; border-left: 3px solid var(--callout); border-radius: 3px; background: color-mix(in srgb, var(--callout) 9%, transparent); }
+.md .callout-title { display: flex; align-items: center; gap: 0.5em; color: var(--callout); font-weight: 600; }
+.md summary.callout-title { cursor: pointer; list-style: none; }
+.md summary.callout-title::-webkit-details-marker { display: none; }
+.md summary.callout-title::after { content: '›'; margin-left: auto; transition: transform 0.15s; }
+.md details.callout[open] > summary.callout-title::after { transform: rotate(90deg); }
+.md .callout-content > :first-child { margin-top: 0.3em; }
+.md :is(.callout-tip, .callout-hint, .callout-important, .callout-success, .callout-check, .callout-done) { --callout: var(--sage, #6a9955); }
+.md :is(.callout-warning, .callout-caution, .callout-attention, .callout-question, .callout-help, .callout-faq, .callout-todo) { --callout: var(--sand, #d7ba7d); }
+.md :is(.callout-failure, .callout-fail, .callout-missing, .callout-danger, .callout-error, .callout-bug) { --callout: var(--rose, #f14c4c); }
+.md :is(.callout-example, .callout-abstract, .callout-summary, .callout-tldr) { --callout: var(--teal, #4ec9b0); }
+.md :is(.callout-quote, .callout-cite) { --callout: var(--muted, #888); }
+.md .properties table { display: table; margin: 0 0 0.4em; font-size: 0.85em; }
+.md .properties th { padding: 0.1em 1em 0.1em 0; border: 0; color: var(--muted); font-weight: 400; text-align: left; }
+.md .properties td { border: 0; padding: 0.1em 0; }
+.md .md-embed { margin: 0.4em 0; padding: 0.3em 0.8em 0.5em; border-left: 2px solid var(--accent); background: color-mix(in srgb, var(--fg) 4%, transparent); }
+.md .md-embed-title { display: block; color: var(--muted); font-size: 0.8em; text-decoration: none; }
+.md .md-embed-title:hover { color: var(--accent); }
+.md .mermaid-diagram { overflow-x: auto; margin: 0.4em 0; text-align: center; }
+.md .mermaid-diagram svg { max-width: 100%; height: auto; }
+.md .md-plugin-failed { text-decoration: underline wavy var(--rose, #f14c4c); }
+.md .notes-rng-value { padding: 0 0.45em; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+.md .notes-rng-value:hover { border-color: var(--accent); }
+.md .notes-rng-fence { display: flex; align-items: center; gap: 0.6em; margin: 0.4em 0 0; padding: 0.4em 0.6em; border: 1px solid var(--border); border-radius: 3px; }
 .code-out { flex: 0 0 auto; max-height: 38%; display: flex; flex-direction: column; border: 1px solid var(--border); box-shadow: var(--lift); }
 .code-out[hidden] { display: none; }
 .code-out-head { display: flex; align-items: center; gap: 1ch; padding: 0.25rem 0.6rem; border-bottom: 1px solid var(--border); font-size: 0.72rem; color: var(--sage); }
@@ -1021,6 +1054,28 @@
 .ide-scm-graph-link { display: flex; align-items: center; gap: 8px; flex: none; margin: 4px 12px 12px 20px; padding: 8px; border: 1px solid var(--ide-border); border-radius: 4px; background: var(--ide-bg); color: var(--ide-fg); cursor: pointer; text-align: left; font: 12px var(--ide-ui); }
 .ide-scm-graph-link span { flex: 1; }
 .ide-scm-graph-link:hover { background: var(--ide-hover); }
+.ide-scm-lfs { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; flex: none; margin: 0 12px 12px 20px; padding: 8px; border: 1px solid var(--ide-border); border-left: 3px solid var(--ide-info); border-radius: 4px; font: 12px var(--ide-ui); }
+.ide-scm-lfs.warn { border-left-color: var(--ide-warn); }
+.ide-scm-lfs.bad { border-left-color: var(--ide-err); }
+.ide-scm-lfs-head { display: flex; align-items: center; gap: 6px; width: 100%; font-weight: 600; }
+.ide-scm-lfs-ver { margin-left: auto; font-weight: 400; color: var(--ide-muted); }
+.ide-scm-lfs p { margin: 0; color: var(--ide-muted); line-height: 1.5; }
+/* the Notes view and the graph */
+.ide-notes-filter { display: block; width: calc(100% - 32px); margin: 6px 12px 4px 20px; }
+.ide-note-row { display: flex; align-items: center; gap: 6px; width: 100%; height: 22px; padding: 0 8px 0 20px; border: 0; background: none; color: var(--ide-fg); font: 13px var(--ide-ui); text-align: left; cursor: pointer; white-space: nowrap; }
+.ide-note-row:hover { background: var(--ide-hover); }
+.ide-note-row:focus-visible { outline: 1px solid var(--ide-accent); outline-offset: -1px; }
+.ide-note-name { overflow: hidden; text-overflow: ellipsis; }
+.ide-note-dir { overflow: hidden; text-overflow: ellipsis; color: var(--ide-muted); font-size: 12px; }
+.ide-page.notes-graph { position: relative; display: flex; flex-direction: column; overflow: hidden; }
+.ide-page.notes-graph[hidden] { display: none; }
+.notes-graph-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--ide-border); font: 12px var(--ide-ui); }
+.notes-graph-find { width: 200px; }
+.notes-graph-toggle { display: flex; align-items: center; gap: 4px; color: var(--ide-muted); cursor: pointer; }
+.notes-graph-count { margin-left: auto; color: var(--ide-muted); }
+.notes-graph-canvas { flex: 1; min-height: 0; width: 100%; outline: none; cursor: grab; touch-action: none; }
+.notes-graph-note { position: absolute; top: 50%; left: 0; right: 0; text-align: center; color: var(--ide-muted); pointer-events: none; }
+.notes-graph-note[hidden] { display: none; }
 .ide-tree .ide-row.cut { opacity: .5; }
 .ide-git-page { overflow: hidden; container-type: inline-size; }
 .ide-git-graph { display: flex; flex-direction: column; flex: 1; min-height: 0; color: var(--ide-fg); font: 12px var(--ide-ui); }

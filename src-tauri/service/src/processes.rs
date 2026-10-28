@@ -444,7 +444,9 @@ pub struct GitRequest {
     creds: Option<GitCreds>,
 }
 
-const GIT_VERBS: &str = "status diff add restore rm mv commit push pull fetch branch switch checkout log show stash rev-parse remote init clone merge rebase reset ls-files tag blame for-each-ref symbolic-ref check-ignore";
+const GIT_VERBS: &str = "status diff add restore rm mv commit push pull fetch branch switch checkout log show stash rev-parse remote init clone merge rebase reset ls-files tag blame for-each-ref symbolic-ref check-ignore lfs";
+// what of git-lfs Sulfur runs: whether it is there, what it tracks, and bringing those files down
+const LFS_VERBS: &str = "version ls-files status pull fetch install env";
 
 /// a git command of the verbs Sulfur runs, without options that run other programs
 pub async fn git(p: GitRequest) -> Res<Output> {
@@ -458,6 +460,9 @@ pub async fn git(p: GitRequest) -> Res<Output> {
     let Some(verb) = args.first().cloned().filter(|v| GIT_VERBS.split(' ').any(|x| x == v)) else {
         return fail("not a git command Sulfur runs");
     };
+    if verb == "lfs" && !args.get(1).is_some_and(|v| LFS_VERBS.split(" ").any(|x| x == v.as_str())) {
+        return fail("not a git lfs command Sulfur runs");
+    }
     let refused = regex::Regex::new(r"(?i)^-c|upload-pack|receive-pack|^--exec|^--config|^--template|^--output").unwrap();
     for a in &args[1..] {
         if refused.is_match(a) || (a == "-u" && ["clone", "pull", "fetch"].contains(&verb.as_str())) {
@@ -484,8 +489,9 @@ pub async fn git(p: GitRequest) -> Res<Output> {
     if !p.dir.is_empty() {
         argv.extend(["-C".into(), p.dir.clone()]);
     }
+    let slow = ["clone", "push", "pull", "fetch"].contains(&verb.as_str())
+        || (verb == "lfs" && ["pull", "fetch"].contains(&args.get(1).map(String::as_str).unwrap_or_default()));
     argv.extend(args);
-    let slow = ["clone", "push", "pull", "fetch"].contains(&verb.as_str());
     command(&argv, None, &env, Duration::from_secs(if slow { 900 } else { 120 })).await
 }
 
@@ -646,5 +652,9 @@ mod tests {
         assert!(git(run(&["status", "-c", "x=y"])).await.unwrap_err().message.contains("option"));
         assert!(git(run(&["fetch", "--upload-pack=evil"])).await.unwrap_err().message.contains("option"));
         assert!(git(run(&["config", "x"])).await.is_err());
+        // git-lfs: what it reports and pulls, nothing that writes the user's config or migrates history
+        assert!(git(run(&["lfs"])).await.unwrap_err().message.contains("lfs"));
+        assert!(git(run(&["lfs", "migrate", "import"])).await.unwrap_err().message.contains("lfs"));
+        assert!(git(run(&["lfs", "ls-files", "-c", "x"])).await.unwrap_err().message.contains("option"));
     }
 }

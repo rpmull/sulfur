@@ -1,5 +1,5 @@
 // markdown as the server renders it (marked, highlight.js, sanitize-html), the page
-// adding only katex for math, fetched on first use
+// adding katex for math and mermaid for diagrams, each fetched on first use
 
 // Sulfur's own service leaves markdown to the page (md-render.js, loaded on first
 // use, once bootLocal has set the flag from the service's info); a Phosphorus
@@ -76,7 +76,77 @@ function paint(el, html) {
   for (const a of el.querySelectorAll('a[href]')) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
   for (const box of el.querySelectorAll('input')) box.setAttribute('disabled', '');
   if (el.querySelector('.math')) drawMath(el);
+  drawPlugins(el);
   el.dispatchEvent(new CustomEvent('md-painted', { bubbles: true }));
+}
+
+// --- what draws itself in rendered markdown: mermaid diagrams in ```mermaid fences, and the
+// notes plugins (notes.js's rng, an extension's) in inline `name: args` code and ```name
+// fences. A plugin's render(source, {kind, name, el}) gives a node or text, or a promise of one
+
+const plugins = new Map();
+export function registerMdPlugin(name, plugin) {
+  const n = String(name).toLowerCase();
+  plugins.set(n, plugin);
+  return { dispose() { if (plugins.get(n) === plugin) plugins.delete(n); } };
+}
+export const mdPlugin = (name) => plugins.get(String(name).toLowerCase());
+
+let mermaidLoad = null;
+let mermaidSeq = 0;
+const loadMermaid = () => (mermaidLoad ||= import('mermaid').then((m) => {
+  const mermaid = m.default;
+  // the page's own background tells which of mermaid's themes reads on it
+  const [r, g, b] = (getComputedStyle(document.body).backgroundColor.match(/\d+/g) || [255, 255, 255]).map(Number);
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 0.2126 * r + 0.7152 * g + 0.0722 * b < 128 ? 'dark' : 'default' });
+  return mermaid;
+}).catch((e) => { mermaidLoad = null; throw e; }));
+const MERMAID = {
+  fence: true,
+  async render(source) {
+    const mermaid = await loadMermaid();
+    const { svg } = await mermaid.render(`sulfur-mermaid-${(mermaidSeq += 1)}`, source);
+    const d = document.createElement('div');
+    d.className = 'mermaid-diagram';
+    d.innerHTML = svg;
+    return d;
+  },
+};
+
+// once the caller has put el where it goes, so a plugin sees the note it's in; plugins only
+// in a note's view (the editor's, marked with its path), diagrams anywhere
+function drawPlugins(el) {
+  if (!el.querySelector('code')) return;
+  Promise.resolve().then(() => drawPluginsNow(el, !!el.closest('[data-note-path]')));
+}
+function drawPluginsNow(el, inNote) {
+  for (const code of [...el.querySelectorAll('code')]) {
+    const pre = code.parentElement?.localName === 'pre' ? code.parentElement : null;
+    let name, source;
+    if (pre) {
+      name = /(?:^|\s)language-([\w-]+)/.exec(code.className)?.[1]?.toLowerCase();
+      source = code.textContent.replace(/\n$/, '');
+    } else {
+      const m = /^([A-Za-z][\w-]*):\s?([\s\S]*)$/.exec(code.textContent);
+      name = m?.[1].toLowerCase();
+      source = m?.[2];
+    }
+    const kind = pre ? 'fence' : 'inline';
+    const plugin = name === 'mermaid' && pre ? MERMAID : inNote && name && plugins.get(name);
+    if (!plugin?.[kind]) continue;
+    const box = document.createElement(pre ? 'div' : 'span');
+    box.className = `md-plugin md-plugin-${name} md-plugin-${kind}`;
+    box.dataset.plugin = name;
+    (pre || code).replaceWith(box);
+    box.append(pre || code);
+    Promise.resolve().then(() => plugin.render(source, { kind, name, el: box })).then((out) => {
+      if (out == null) return;
+      box.replaceChildren(typeof out === 'string' ? document.createTextNode(out) : out);
+    }, (err) => {
+      box.classList.add('md-plugin-failed');
+      box.title = `${name}: ${err?.message || err}`;
+    });
+  }
 }
 
 // --- math -------------------------------------------------------------------

@@ -64,7 +64,9 @@ import { diagnosticCounts, diagnosticSeverity } from './diagnostics.js';
 import { isSQLiteFile, sqliteProjectPath, mountSQLite } from './sqlite.js';
 import { createBuildProblemMatcher } from './build-problems.js';
 import { startTerminal, taskTerminal, termsRetheme } from '#host';
-import { renderMd } from '../md.js';
+import { renderMd, registerMdPlugin, mdPlugin } from '../md.js';
+import { NOTES_DIR, NOTES_IMAGES, isNote, noteTitle, linkIndex, resolveLink, noteGraph, pastedImageName, rngPlugin, joinPath as notePath } from './notes.js';
+import { mountNoteGraph } from './notes-graph.js';
 import { symbolsFor, identifierAt, enclosingSymbol } from '../symbols.js';
 import { singleFileCommand, configsFor } from './build-commands.js';
 import { supportsMesh } from './mesh.js';
@@ -102,6 +104,8 @@ const BINARY_EXT = new Set(['pdf', 'zip', 'gz', 'tgz', 'xz', 'bz2', 'zst', '7z',
 // the workbench's own glyphs, 16 by 16, stroked as the desktop's are
 const IC = {
   files: 'M5.5 1.5h5l3 3v8h-8zM10.5 1.5v3h3M3.5 4.5v10h7',
+  notes: 'M3.5 1.5h7l2 2v11h-9zM5.5 5.5h5M5.5 8h5M5.5 10.5h3',
+  graph: 'M2.5 4.5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0zM10.5 3.5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0zM6.5 12.5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 1 0-3 0zM5.4 5.4l2 5.6M11.3 4.9L8.7 11.1M5.5 4.3l5-.6',
   search: 'M6.75 2a4.75 4.75 0 1 0 0 9.5 4.75 4.75 0 0 0 0-9.5zM10.2 10.2L14 14',
   run: 'M4.5 2.5v11l9-5.5z',
   runSide: 'M3 2.5v10l6.5-5zM12 8.5c1.1 0 2 .9 2 2.2v1.6c0 1.2-.9 2.2-2 2.2s-2-1-2-2.2v-1.6c0-1.3.9-2.2 2-2.2zM10 11.5H8.5M15.5 11.5H14M12 8.5V7',
@@ -516,6 +520,7 @@ const SETTINGS = {
   'editor.enablePreview': { def: true, type: 'boolean', title: 'Workbench › Editor: Enable Preview', about: 'Controls whether a file opened from the explorer is shown as a preview, its tab reused until you edit it or double click.' },
   'explorer.confirmDelete': { def: true, type: 'boolean', title: 'Explorer: Confirm Delete', about: 'Controls whether the explorer asks before deleting a file or folder. A delete here is for good: there is no trash.' },
   'explorer.autoReveal': { def: true, type: 'boolean', title: 'Explorer: Auto Reveal', about: 'Controls whether the explorer reveals and selects the active file.' },
+  'notes.rng.enabled': { def: true, type: 'boolean', title: 'Notes: RNG', about: 'Roll in rendered notes: inline `rng: 2d6+1`, `rng: 1-100`, `rng: coin`, `rng: pick a | b | c` and ```rng tables. Click a result to roll again.' },
   'git.autofetch': { def: true, type: 'boolean', title: 'Git: Autofetch', about: 'Fetch the branch’s upstream when a folder opens and every three minutes after, so Source Control shows the commits waiting to be pulled.' },
   'search.exclude': { def: 'build, out, bin, obj, target, .vs, .vscode, cmake-build-*, dist, .cache, .gradle, __pycache__, node_modules, .git', type: 'string', title: 'Search: Exclude', about: 'Comma separated folder names or simple globs left out of quick open (Ctrl+P) and Find in Files, as a big project’s build outputs and caches are; the explorer still shows them.' },
   'files.exclude': { def: '.git, node_modules, __pycache__, .DS_Store', type: 'string', title: 'Files: Exclude', about: 'Comma separated names (node_modules), extensions (.meta hides every *.meta file), globs (*.o, *.{png,jpg}) or paths (build/cache) hidden from the explorer, quick open and search. VS Code\'s **/ forms work too.' },
@@ -946,6 +951,7 @@ const SIDE_VIEWS = [
   { id: 'explorer', title: 'Explorer', ic: 'files', cmd: 'workbench.view.explorer' },
   { id: 'search', title: 'Search', ic: 'search', cmd: 'workbench.action.findInFiles' },
   { id: 'scm', title: 'Source Control', ic: 'scm', cmd: 'workbench.view.scm' },
+  { id: 'notes', title: 'Notes', ic: 'notes', cmd: 'sulfur.notes.focus' },
   { id: 'run', title: 'Run and Build', ic: 'runSide', cmd: 'workbench.view.run' },
   { id: 'extensions', title: 'Extensions', ic: 'ext', cmd: 'workbench.view.extensions' },
 ];
@@ -1048,6 +1054,7 @@ function buildActivity() {
   buildExplorer();
   buildSearch();
   buildScm();
+  buildNotesView();
   buildRunView();
   buildExtView();
 }
@@ -2239,6 +2246,7 @@ function mountCode(t) {
   t.edId = `ide-code-${(edSeq += 1)}`;
   t.ed = codeEditor(t.view, file, null, t.edId, {
     bare: true, definitionLinks: true, formatting: formattingOptions, display: editorDisplayOptions, diagnosticDelay: () => setting('editor.diagnostics.delay'), onState: (info) => tabState(t, info),
+    markdownView: (box, f) => notesDecorate(box, f), pasteImage: (blob, f) => pasteNoteImage(blob, f),
     // the language server's word on the symbol under the mouse, as markdown under its problems
     hover: async (offset, signal) => {
       if (!setting('editor.hover.enabled')) return null;
@@ -2726,6 +2734,9 @@ function tabState(t, info) {
   inlineCompletions.changed(t);
   if (info.ready && !was?.ready && t === I.active) languages.get(t).catch((e) => log(e.message, 'Languages'));
   if (info.ready && !was?.ready) applyPending(t);
+  if (info.ready && !was?.ready && t.kind === 'code' && LFS_POINTER.test(t.ed?.text?.() || '')) {
+    notify('info', `${t.title} is a Git LFS pointer, not the file’s content.`, { actions: [{ label: 'Pull LFS Files', run: () => scmLfsPull() }] });
+  }
   if (info.dirty && t.preview) pin(t);
   if (!was || was.dirty !== info.dirty) t.tabEl.classList.toggle('dirty', info.dirty);
   // typing moves every diagnostic after the caret: the problems list redrawn when what it
@@ -2745,6 +2756,7 @@ function tabState(t, info) {
     scmRefreshSoon();
     // the project's build settings, as edited by hand
     if (t.rel.endsWith(`/${BUILD_FILE}`) && under(t.rel, I.st.root) && sameLoc(t.loc, locOf())) loadBuildConfig(filesParent(filesParent(t.rel)));
+    if (isNote(t.rel)) noteGraphSoon();
   }
 }
 
@@ -3662,6 +3674,12 @@ function registerCommands() {
   C('sulfur.git.sync', 'Git: Sync', () => scmSync(), { category: 'Git' });
   C('sulfur.git.history', 'Git: View History…', () => scmHistory(), { category: 'Git' });
   C('sulfur.git.graph', 'Git: Open Source Control Graph', () => scmHistory(), { category: 'Git' });
+  C('sulfur.git.lfsPull', 'Git LFS: Pull Files', () => scmLfsPull(), { category: 'Git' });
+  C('sulfur.notes.focus', 'Notes: Focus on Notes View', () => showSide('notes', true, true), { category: 'Notes' });
+  C('sulfur.notes.new', 'Notes: New Note…', () => newNote(), { category: 'Notes' });
+  C('sulfur.notes.graph', 'Notes: Open Graph View', () => openNoteGraph(), { category: 'Notes' });
+  C('sulfur.notes.graphNotes', 'Notes: Open Graph of the Notes Folder', () => openNoteGraph('notes'), { category: 'Notes' });
+  C('sulfur.git.lfsInstall', 'Git LFS: Install Hooks in This Repository', () => scmLfsInstall(), { category: 'Git' });
   C('sulfur.forgejo.open', 'Forgejo: Open on Forgejo', () => forgejoOpen(I.active?.rel), { when: () => meshHas('forgejo'), category: 'Forgejo' });
   C('sulfur.forgejo.pr', 'Forgejo: Create Pull Request…', () => forgejoPR(), { when: () => meshHas('forgejo'), category: 'Forgejo' });
   C('sulfur.forgejo.prs', 'Forgejo: Pull Requests…', () => forgejoPRs(), { when: () => meshHas('forgejo'), category: 'Forgejo' });
@@ -4934,6 +4952,256 @@ function notesPopup(anchor) {
   menu(anchor, [...items, '-', { label: 'Clear All Notifications', disabled: !I.notes.length, run: () => { I.notes = []; I.layer.querySelector('.ide-toasts')?.replaceChildren(); paintStatus(); } }], { side: 'right', up: true });
 }
 
+// --- notes: the folder's markdown, linked by [[name]] ----------------------------------------
+// Every markdown file in the open folder is a note. .sulfur/.notes keeps the ones made here
+// (Notes: New Note, or a [[link]] to a note not yet written, clicked) and, in its images
+// folder, the images pasted into any note. The Notes view lists them; the graph shows what
+// links what, across the folder or the notes folder alone
+
+// notes-rng, Sulfur's own notes plugin, on while its setting is
+const rngOn = () => !!I && setting('notes.rng.enabled') !== false;
+registerMdPlugin('rng', { get inline() { return rngOn(); }, get fence() { return rngOn(); }, render: (source, o) => rngPlugin.render(source, o) });
+
+const notesRoot = () => `${I.st.root}/${NOTES_DIR}`;
+// the folder's files for finding links in, kept while the file index is
+async function notesIndex() {
+  const idx = await fileIndex();
+  if (!I.notesLinks || I.notesLinks.from !== idx) {
+    const paths = (idx?.files || []).map((f) => f.path);
+    I.notesLinks = { from: idx, paths, ...linkIndex(paths) };
+  }
+  return I.notesLinks;
+}
+const notesChanged = () => { I.index = null; I.notesLinks = null; paintNotesSoon(); noteGraphSoon(); };
+// an open tab's text, else the disk's
+async function noteText(path) {
+  const t = I.tabs.find((x) => x.rel === path && x.ed?.ready?.() && sameLoc(x.loc, locOf()));
+  return t ? t.ed.text() : readAt(path);
+}
+const fileHere = (file, path) => ({ host: file.share === 'home' ? homePick(path) : file.host, share: file.share });
+
+// a rendered note's links, images, embeds and tags made the workbench's: a link found as
+// a file (marked when it isn't one yet), an image shown from where it is, a ![[note]] drawn in
+function notesDecorate(box, file) {
+  if (!I) return;
+  const state = I;
+  const from = file.path;
+  notesIndex().then((links) => {
+    if (I !== state) return;
+    for (const a of box.querySelectorAll('a.wikilink:not([data-notes])')) {
+      a.dataset.notes = '1';
+      a.removeAttribute('target');
+      const wiki = a.dataset.wiki || '';
+      const cut = wiki.search(/[#^]/);
+      const target = cut < 0 ? wiki : wiki.slice(0, cut), heading = cut < 0 ? '' : wiki.slice(cut + 1);
+      const hit = target ? resolveLink(target, from, links, I.st.root) : from;
+      a.classList.toggle('unresolved', !hit);
+      a.title = hit ? wsRel(hit) : `${target}: not written yet. Click to write it in ${NOTES_DIR}`;
+      a.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); followNote(target, heading, from); });
+      if (a.classList.contains('wiki-embed') && hit && isNote(hit) && hit !== from && !a.closest('.md-embed')) embedNote(a, hit, heading);
+    }
+    for (const img of box.querySelectorAll('img:not([data-notes])')) {
+      img.dataset.notes = '1';
+      let raw = img.dataset.wiki || img.getAttribute('src') || '';
+      if (!img.dataset.wiki) try { raw = decodeURI(raw); } catch {}
+      if (!raw || /^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('/')) continue;
+      const hit = resolveLink(raw, from, links, I.st.root) || (img.dataset.wiki ? '' : notePath(filesParent(from), raw));
+      if (!hit) { img.classList.add('unresolved'); img.alt = `${raw} (not found)`; img.removeAttribute('src'); continue; }
+      img.src = filesApi(fileHere(file, hit), 'download', { path: hit, inline: '' });
+      img.title ||= wsRel(hit);
+    }
+    for (const tag of box.querySelectorAll('span.tag[data-tag]:not([data-notes])')) {
+      tag.dataset.notes = '1';
+      tag.title = `Find #${tag.dataset.tag} in the folder`;
+      tag.addEventListener('click', (e) => { e.stopPropagation(); findTag(tag.dataset.tag); });
+    }
+  });
+}
+
+// ![[note]]: the note drawn in place, its title a link to it
+async function embedNote(a, path, heading) {
+  const text = await noteText(path);
+  if (text == null || !I) return;
+  let body = text.replace(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '');
+  if (heading) {
+    // from that heading to the next as deep or deeper
+    const lines = body.split('\n');
+    const at = lines.findIndex((l) => /^#{1,6}\s/.test(l) && l.replace(/^#+\s*/, '').trim().toLowerCase() === heading.trim().toLowerCase());
+    if (at >= 0) {
+      const depth = /^#+/.exec(lines[at])[0].length;
+      const end = lines.findIndex((l, i) => i > at && /^#{1,6}\s/.test(l) && /^#+/.exec(l)[0].length <= depth);
+      body = lines.slice(at, end < 0 ? undefined : end).join('\n');
+    }
+  }
+  const box = el('div', 'md-embed');
+  const head = Object.assign(el('a', 'md-embed-title', heading ? `${noteTitle(path)} > ${heading}` : noteTitle(path)), { href: '#', title: wsRel(path) });
+  head.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openFile(path, { preview: false }); });
+  const inner = el('div', 'md-embed-body');
+  box.append(head, inner);
+  a.replaceWith(box);
+  renderMd(inner, body.trim().slice(0, 200000), false);
+}
+
+// a [[link]] followed: its file opened (at its heading), a note not yet written written
+async function followNote(target, heading, from) {
+  const links = await notesIndex();
+  let hit = target ? resolveLink(target, from, links, I.st.root) : from;
+  if (!hit) hit = await createNote(target);
+  if (!hit || !I) return;
+  const t = openFile(hit, { preview: false });
+  if (!heading || !t) return;
+  // the heading found once the file is in
+  for (let i = 0; i < 40 && I && !t.ed?.ready?.(); i++) await sleep(100);
+  const text = t.ed?.ready?.() ? t.ed.text() : '';
+  const m = new RegExp(`^#{1,6}\\s+${heading.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'im').exec(text);
+  if (m) t.ed.select(m.index, m.index);
+}
+
+// a note written in .sulfur/.notes: name may hold folders (Projects/Ideas)
+async function createNote(name, text) {
+  const clean = String(name || '').trim().replace(/\.(?:md|markdown)$/i, '').replace(/[\\:*?"<>|#^[\]]/g, '-').replace(/^\/+|\/+$/g, '');
+  if (!clean || clean.split('/').some((p) => p === '..' || p === '.')) { notify('warning', `${name} can't be a note's name.`); return null; }
+  const path = `${notesRoot()}/${clean}.md`;
+  const links = await notesIndex();
+  const had = links.all.get(path.toLowerCase());
+  if (had) return had;
+  try {
+    await writeAt(path, text ?? `# ${noteTitle(path)}\n\n`);
+  } catch (err) {
+    notify('error', `The note couldn't be written: ${err.message}`);
+    return null;
+  }
+  if (!I) return null;
+  loadDir(filesParent(path), true);
+  notesChanged();
+  return path;
+}
+
+async function newNote() {
+  const name = await inputBox({ prompt: `Name the note (it's kept in ${NOTES_DIR})`, placeholder: 'e.g. Ideas, or Projects/Ideas' });
+  if (!name?.trim() || !I) return;
+  const path = await createNote(name);
+  if (path) openFile(path, { preview: false });
+}
+
+// an image pasted into a note: kept in .sulfur/.notes/images under a name of its own, the
+// note given ![[name]] for it
+async function pasteNoteImage(blob, file) {
+  if (blob.size > 64 * 1024 * 1024) throw new Error('over 64 MB');
+  const links = await notesIndex();
+  const dir = `${I.st.root}/${NOTES_IMAGES}`;
+  const name = pastedImageName(blob.type, blob.name, new Date(), (n) => links.all.has(`${dir}/${n}`.toLowerCase()));
+  const path = `${dir}/${name}`;
+  const r = await fetch(filesApi(fileHere(file, path), 'upload', { path }), { method: 'POST', body: blob });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `status ${r.status}`);
+  if (!I) return null;
+  loadDir(dir, true);
+  notesChanged();
+  return `![[${name}]]`;
+}
+
+function findTag(tag) {
+  showSide('search', true, true);
+  I.search.q.value = `#${tag}`;
+  I.search.q.dispatchEvent(new Event('input'));
+}
+
+// an extension's markdown answer as a node, inline answers without their paragraph
+function notePluginNode(md, kind) {
+  if (md == null || md === '') return null;
+  const d = el(kind === 'fence' ? 'div' : 'span', 'md-plugin-out');
+  const unwrap = () => { if (kind === 'inline' && d.children.length === 1 && d.firstElementChild.localName === 'p') d.firstElementChild.replaceWith(...d.firstElementChild.childNodes); };
+  d.addEventListener('md-painted', unwrap);
+  renderMd(d, String(md), false);
+  unwrap();
+  return d;
+}
+
+// the Notes view: the notes folder's notes, then the folder's other markdown
+function buildNotesView() {
+  const v = I.sideViews.get('notes');
+  v.acts = [
+    btn('', 'plus', 'New Note…', () => run('sulfur.notes.new')),
+    btn('', 'graph', 'Open Graph View', () => run('sulfur.notes.graph')),
+    btn('', 'refresh', 'Refresh', () => notesChanged()),
+  ];
+  v.filter = Object.assign(el('input', 'ide-input ide-notes-filter'), { placeholder: 'Filter notes', spellcheck: false });
+  v.filter.setAttribute('aria-label', 'Filter notes');
+  v.filter.addEventListener('input', debounce(() => paintNotes(), 100));
+  v.list = el('div', 'ide-notes-list');
+  v.body.append(v.filter, v.list);
+  v.onShow = () => paintNotes();
+}
+const paintNotesSoon = debounce(() => I && paintNotes(), 200);
+async function paintNotes() {
+  const v = I.sideViews.get('notes');
+  if (!v || v.body.hidden) return;
+  const state = I;
+  let links;
+  try { links = await notesIndex(); } catch (err) { v.list.replaceChildren(el('p', 'ide-empty-note bad', err.message)); return; }
+  if (I !== state || v.body.hidden) return;
+  const vault = notesRoot();
+  const q = v.filter.value.trim().toLowerCase();
+  const all = links.paths.filter((p) => isNote(p) && (!q || p.toLowerCase().includes(q))).sort((a, b) => a.localeCompare(b));
+  const mine = all.filter((p) => p.startsWith(`${vault}/`));
+  const rest = all.filter((p) => !p.startsWith(`${vault}/`));
+  const rows = [];
+  const section = (title, list, rel) => {
+    const head = el('div', 'ide-sec-head static');
+    head.append(el('span', 'ide-sec-title', title), el('span', 'ide-badge', String(list.length)));
+    rows.push(head);
+    for (const p of list) {
+      const r = Object.assign(el('button', 'ide-note-row'), { type: 'button', title: wsRel(p) });
+      const where = filesParent(rel(p));
+      r.append(icon('notes', 'ide-fi'), el('span', 'ide-note-name', noteTitle(p)), el('span', 'ide-note-dir', where));
+      r.addEventListener('click', () => openFile(p, { preview: true }));
+      r.addEventListener('dblclick', () => openFile(p, { preview: false }));
+      contextActions(r, () => [{ label: 'Open', run: () => openFile(p, { preview: false }) }, { label: 'Copy Link', run: () => copyMenuText(`[[${noteTitle(p)}]]`) }, '-', cmdItem('sulfur.notes.graph', 'Open Graph View')]);
+      rows.push(r);
+    }
+  };
+  if (mine.length || !q) section(`Notes · ${NOTES_DIR}`, mine, (p) => p.slice(vault.length + 1));
+  if (!mine.length && !q) {
+    const empty = el('div', 'ide-scm-empty');
+    empty.append(el('p', '', `No notes yet. New notes, and images pasted into any note, are kept in ${NOTES_DIR}.`));
+    const make = Object.assign(el('button', 'ide-button'), { type: 'button', textContent: 'New Note' });
+    make.addEventListener('click', () => run('sulfur.notes.new'));
+    empty.append(make);
+    rows.push(empty);
+  }
+  if (rest.length) section('In the Folder', rest, (p) => wsRel(p));
+  if (q && !all.length) rows.push(el('p', 'ide-empty-note', `No notes match “${v.filter.value.trim()}”.`));
+  if (links.from?.truncated) rows.push(el('p', 'ide-run-note', 'The folder is too big to list every note.'));
+  v.list.replaceChildren(...rows);
+}
+
+// the graph in a tab of its own, of the folder or the notes folder
+function openNoteGraph(scope) {
+  const st = (I.st.notesGraph ||= { scope: 'folder', show: {} });
+  if (scope) st.scope = scope;
+  const t = openPage('notes-graph', 'Graph', 'graph', (t) => {
+    t.graph = mountNoteGraph(t.view, {
+      scopes: [{ id: 'folder', label: `Folder: ${baseName(I.st.root)}` }, { id: 'notes', label: `Notes: ${NOTES_DIR}` }],
+      scope: st.scope, show: st.show,
+      onScope: (s) => { st.scope = s; saveState(); },
+      onShow: (s) => { st.show = { ...s }; saveState(); },
+      load: (s, show) => loadNoteGraph(s, show),
+      open: (n) => (n.kind === 'tag' ? findTag(n.label.slice(1)) : n.kind === 'missing' ? followNote(n.label, '', `${notesRoot()}/.`) : openFile(n.id, { preview: false })),
+    });
+    t.dispose = () => t.graph.dispose();
+  });
+  if (scope && t.graph) t.graph.refresh();
+}
+const noteGraphSoon = debounce(() => I?.tabs.find((t) => t.page === 'notes-graph')?.graph?.refresh(), 800);
+async function loadNoteGraph(scope, show) {
+  const links = await notesIndex();
+  const vault = `${notesRoot()}/`;
+  const paths = links.paths.filter((p) => isNote(p) && (scope !== 'notes' || p.startsWith(vault))).slice(0, 4000);
+  const notes = [];
+  await each(paths, 8, async (p) => { const text = await noteText(p).catch(() => null); if (typeof text === 'string') notes.push({ path: p, text }); });
+  return noteGraph(notes, links, { root: I.st.root, tags: show.tags, files: show.files, missing: show.missing });
+}
+
 // --- the panel: problems, output, terminals ------------------------------------------------
 
 const PANEL_VIEWS = [
@@ -5086,20 +5354,12 @@ function paintProblems() {
   const all = [...byFile.values()].flat();
   I.problemText = [...byFile].flatMap(([rel, list]) => list.map((x) => `${rel}:${x.line}:${x.col}: ${x.sev}: ${x.msg} (${x.src})`)).join('\n');
   const errs = all.filter((x) => x.sev === 'error').length;
-  pv.badge.hidden = !all.length;
-  pv.badge.textContent = String(all.length);
   I.problemCounts = { errors: errs, warnings: all.filter((x) => x.sev === 'warning').length };
   paintStatus();
   // the filter button lit while it hides something
   const f = problemFilter();
   const filtering = !f.error || !f.warning || !f.info || f.active || !!f.text.trim();
   pv.kinds?.classList.toggle('on', !f.error || !f.warning || !f.info || f.active);
-  if (pv.body.hidden) return;
-  I.probShut ||= new Set();
-  if (!all.length) {
-    pv.list.replaceChildren(el('div', 'ide-empty-note', 'No problems have been detected in the open files or the last build.'));
-    return;
-  }
   const matches = problemFilterTest(f.text);
   const activeRel = I.active?.rel;
   const shown = new Map();
@@ -5108,6 +5368,15 @@ function paintProblems() {
     if (f.active && rel !== activeRel) continue;
     const kept = list.filter((x) => f[x.sev] !== false && matches(x, rel));
     if (kept.length) { shown.set(rel, kept); count += kept.length; }
+  }
+  // the tab's count is what the filter lets through, as the list below shows
+  pv.badge.hidden = !count;
+  pv.badge.textContent = String(count);
+  if (pv.body.hidden) return;
+  I.probShut ||= new Set();
+  if (!all.length) {
+    pv.list.replaceChildren(el('div', 'ide-empty-note', 'No problems have been detected in the open files or the last build.'));
+    return;
   }
   I.probRels = [...shown.keys()];
   const rows = [];
@@ -7168,12 +7437,87 @@ async function scmRefresh(loud = false) {
   }
   if (I !== state || I.scmRevision !== revision || wsKey() !== key || gitWhere()?.host !== where?.host) return;
   s.decorations = explorerChanges(s, I.st.root);
+  s.lfs = s.top ? scmLfsSeen.get(`${s.host}\n${s.top}`)?.lfs || null : null;
   I.scm = s;
   paintTreeSoon();
   if (loud && s.why && s.why !== 'none') notify('error', `Source Control: ${s.why}`);
   paintScm();
   paintStatus();
   scmAutoFetch(s, where);
+  if (s.top) scmLfs(s, where, loud);
+}
+
+// --- Git LFS: whether the repository keeps files in it, whether git-lfs is on the machine
+// running git, and which of those files are still pointers. Asked again after a few minutes,
+// a refresh asked for, or a pull, checkout or other git operation
+const LFS_MS = 5 * 60 * 1000;
+const LFS_POINTER = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\r?\n/;
+const LFS_SITE = 'https://git-lfs.com';
+const scmLfsSeen = new Map();
+async function scmLfs(s, where, fresh = false) {
+  const id = `${s.host}\n${s.top}`;
+  const last = scmLfsSeen.get(id);
+  if (last && (last.running || (!fresh && Date.now() - last.at < LFS_MS))) return;
+  const entry = { running: true, at: Date.now(), lfs: last?.lfs || null, said: last?.said || '' };
+  scmLfsSeen.set(id, entry);
+  const top = { where, ...atTopOf(s) };
+  let lfs = null;
+  try {
+    // the patterns any .gitattributes in the index sends through the lfs filter
+    const listed = await git(['ls-files', '-z', '--', '*.gitattributes'], { ...top, anyCode: true });
+    const files = String(listed.out || '').split('\0').filter((f) => f === '.gitattributes' || f.endsWith('/.gitattributes')).slice(0, 20);
+    const patterns = [];
+    for (const f of files) {
+      const shown = await git(['show', `:${f}`], { ...top, anyCode: true });
+      const dir = f.slice(0, -'.gitattributes'.length);
+      for (const line of String(shown.out || '').split(/\r?\n/)) {
+        const m = line.trim().match(/^(\S+)\s.*\bfilter=lfs\b/);
+        if (m && !m[1].startsWith('#')) patterns.push(dir + m[1]);
+      }
+    }
+    if (patterns.length) {
+      lfs = { patterns, installed: false, version: '', files: 0, missing: [] };
+      const v = await git(['lfs', 'version'], { ...top, anyCode: true }).catch(() => null);
+      lfs.installed = v?.code === 0;
+      lfs.version = lfs.installed ? String(v.out || '').trim().split('\n')[0] : '';
+      if (lfs.installed) {
+        // "<oid> * <path>" for a file whose content is here, "<oid> - <path>" for a pointer
+        const ls = await git(['lfs', 'ls-files'], { ...top, anyCode: true }).catch(() => null);
+        for (const line of String(ls?.out || '').replace(/\r/g, '').split('\n')) {
+          const m = line.match(/^\S+ ([*-]) (.+)$/);
+          if (!m) continue;
+          lfs.files += 1;
+          if (m[1] === '-') lfs.missing.push(m[2]);
+        }
+      }
+    }
+  } catch {
+    lfs = entry.lfs;
+  }
+  entry.running = false;
+  entry.at = Date.now();
+  entry.lfs = lfs;
+  if (!I?.scm || I.scm.host !== s.host || I.scm.top !== s.top) return;
+  I.scm.lfs = lfs;
+  paintScm();
+  // said once a session for each repository and each way it stands
+  const say = !lfs ? '' : !lfs.installed ? 'absent' : lfs.missing.length ? `missing:${lfs.missing.length}` : '';
+  if (say && say !== entry.said) {
+    const repo = baseName(s.top);
+    if (!lfs.installed) notify('warning', `${repo} keeps files in Git LFS, but git-lfs isn’t installed on ${s.host || 'this machine'}: those files are small text pointers until it is.`, { actions: [{ label: 'Get Git LFS', run: () => openExternal(LFS_SITE) }] });
+    else notify('info', `${lfs.missing.length} Git LFS file${lfs.missing.length === 1 ? '' : 's'} in ${repo} ${lfs.missing.length === 1 ? 'hasn’t' : 'haven’t'} been downloaded.`, { actions: [{ label: 'Pull LFS Files', run: () => scmLfsPull() }] });
+  }
+  entry.said = say;
+}
+const atTopOf = (s) => ({ dir: /^[A-Za-z]:\//.test(s.top || '') ? s.top.replace(/\//g, '\\') : s.top || undefined });
+function scmLfsPull() {
+  if (!I.scm?.top) return notify('warning', 'Open a folder in a Git repository first.');
+  if (I.scm.lfs && !I.scm.lfs.installed) return notify('warning', `Install git-lfs on ${I.scm.host || 'this machine'} first.`, { actions: [{ label: 'Get Git LFS', run: () => openExternal(LFS_SITE) }] });
+  return scmOp(['lfs', 'pull'], 'Pulling Git LFS files', atTop());
+}
+function scmLfsInstall() {
+  if (!I.scm?.top) return notify('warning', 'Open a folder in a Git repository first.');
+  return scmOp(['lfs', 'install', '--local'], 'Installing Git LFS hooks', atTop());
 }
 
 // the upstream fetched quietly when a repository with one is first seen and every few
@@ -7271,6 +7615,7 @@ function paintScm() {
   graphLink.append(icon('scm'), el('span', '', 'Source Control Graph'), icon('right'));
   graphLink.addEventListener('click', () => scmHistory());
   body.append(commitBox, br, graphLink);
+  if (s.lfs) body.append(scmLfsBox(s.lfs));
   if (messageSelection) { msg.focus({ preventScroll: true }); msg.setSelectionRange(...messageSelection); }
 
   const section = (title, list, staged) => {
@@ -7294,6 +7639,32 @@ function paintScm() {
   if (!s.staged.length && !s.changes.length) body.append(el('p', 'ide-empty-note', `Nothing to commit on ${s.branch}: the working tree is clean.`));
   body.scrollTop = keepTop;
   renderScm();
+}
+
+// the repository's Git LFS: what it tracks, and what's still to come down
+function scmLfsBox(lfs) {
+  const box = el('div', `ide-scm-lfs${!lfs.installed ? ' bad' : lfs.missing.length ? ' warn' : ''}`);
+  const head = el('div', 'ide-scm-lfs-head');
+  head.append(icon(!lfs.installed || lfs.missing.length ? 'warning' : 'info'), el('span', '', 'Git LFS'), el('span', 'ide-scm-lfs-ver', lfs.installed ? lfs.version.replace(/^git-lfs\//, '').split(' ')[0] : 'not installed'));
+  box.append(head);
+  const shown = lfs.patterns.slice(0, 6).join(', ') + (lfs.patterns.length > 6 ? ` and ${lfs.patterns.length - 6} more` : '');
+  box.title = `Tracked by .gitattributes: ${lfs.patterns.join(', ')}`;
+  if (!lfs.installed) {
+    box.append(el('p', '', `This repository tracks ${shown} with Git LFS. Install git-lfs to work with their content; until then they are text pointers.`));
+    const get = Object.assign(el('button', 'ide-button secondary'), { type: 'button', textContent: 'Get Git LFS' });
+    get.addEventListener('click', () => openExternal(LFS_SITE));
+    box.append(get);
+    return box;
+  }
+  box.append(el('p', '', lfs.missing.length
+    ? `${lfs.missing.length} of ${lfs.files} LFS file${lfs.files === 1 ? '' : 's'} not downloaded (${shown}).`
+    : `${lfs.files} file${lfs.files === 1 ? '' : 's'} in LFS (${shown}), all downloaded.`));
+  if (lfs.missing.length) {
+    const pull = Object.assign(el('button', 'ide-button'), { type: 'button', textContent: 'Pull LFS Files' });
+    pull.addEventListener('click', () => scmLfsPull());
+    box.append(pull);
+  }
+  return box;
 }
 
 // Only the rows in view (and a screen's worth either side) made, as the explorer's: a
@@ -7368,6 +7739,7 @@ async function scmOp(args, doing, o = {}) {
 }
 async function scmAfter() {
   if (!I) return;
+  for (const e of scmLfsSeen.values()) e.at = 0;
   await scmRefresh();
   if (!I) return;
   loadDir(I.st.root, true);
@@ -9411,6 +9783,8 @@ function teardownExt(x, keepFrame = false) {
   x.status.clear();
   for (const k of x.providers) { I.providers.delete(k); const c = I.chats.get(k); if (c) { c.busy = false; c.req = null; } }
   x.providers.clear();
+  for (const r of x.noteRenderers?.values() || []) r.dispose();
+  x.noteRenderers?.clear();
   for (const [, v] of [...x.views]) { if (v.sidebar) v.dispose(); else closeTab(v.t, true); }
   x.views.clear();
   for (const entry of [...(x.sideViews?.values() || [])]) entry.dispose();
@@ -9608,6 +9982,20 @@ const EXT_CALLS = {
     paintChat(true);
   },
   'agents.unregister': (x, pid) => { const key = `ext:${x.id}:${pid}`; I.providers.delete(key); x.providers.delete(key); paintChat(true); },
+  // a notes plugin: inline `name: …` code and ```name fences in rendered notes drawn by the
+  // extension, its markdown answer rendered as any note's
+  'notes.register': (x, name, o = {}) => {
+    const n = String(name).toLowerCase();
+    if (!/^[a-z][\w-]*$/.test(n)) throw new Error(`'${name}' isn't a notes plugin name: a letter, then letters, digits, - and _`);
+    if (n === 'mermaid' || (mdPlugin(n) && !x.noteRenderers?.has(n))) throw new Error(`the notes plugin '${n}' is already registered`);
+    x.noteRenderers ||= new Map();
+    x.noteRenderers.get(n)?.dispose();
+    x.noteRenderers.set(n, registerMdPlugin(n, {
+      inline: o.inline !== false, fence: o.fence !== false,
+      render: (source, { kind, el: box }) => extRequest(x, { t: 'noteRender', name: n, req: { kind, source, path: box.closest('[data-note-path]')?.dataset.notePath || '' } }).then((md) => notePluginNode(md, kind)),
+    }));
+  },
+  'notes.unregister': (x, name) => { const n = String(name).toLowerCase(); x.noteRenderers?.get(n)?.dispose(); x.noteRenderers?.delete(n); },
   'agents.progress': (x, rid, text) => { for (const c of I.chats.values()) if (c.req === rid) { c.live = text; paintChat(); } },
   'events.subscribe': (x, n) => { x.subs.add(n); },
   'tree.create': (x, viewId, cmd) => createExtensionTree(x, String(viewId), String(cmd)),

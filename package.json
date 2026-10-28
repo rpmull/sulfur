@@ -27,6 +27,7 @@
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-webgl": "0.19.0",
     "katex": "0.18.10",
+    "mermaid": "11.17.2",
     "@lezer/common": "1.5.3",
     "@lezer/lr": "1.4.10",
     "@lezer/highlight": "1.2.5",

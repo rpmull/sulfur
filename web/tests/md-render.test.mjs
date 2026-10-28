@@ -64,3 +64,24 @@ test('page markdown keeps math, code spans, task lists and source blocks', () =>
     setSanitizer(null);
   }
 });
+
+test('notes syntax: links, embeds, callouts, highlights, tags, comments and properties', () => {
+  setSanitizer((h) => h);
+  try {
+    const html = markdown('See [[Other Note|other]], [[Deep#Part]], ![[pic one.png|200]] ==lit== #tag/x %%gone%% `#code` `[[Code]]`', false);
+    for (const want of ['<a class="wikilink" href="#" data-wiki="Other Note">other</a>', 'data-wiki="Deep#Part">Deep &gt; Part</a>', '<img class="wiki-embed" src="pic%20one.png" data-wiki="pic one.png" alt="pic one.png" width="200">', '<mark>lit</mark>', 'data-tag="tag/x">#tag/x</span>', '<code>#code</code>', '<code>[[Code]]</code>']) assert.ok(html.includes(want), want);
+    assert.ok(!html.includes('gone'));
+    const fold = markdown('> [!warning]- Careful **now**\n> body', false);
+    assert.match(fold, /^<details class="callout callout-warning"><summary class="callout-title">.*Careful <strong>now<\/strong>.*<\/summary><div class="callout-content"><p>body<\/p>/s);
+    assert.match(markdown('> [!tip]\n> x', false), /<div class="callout callout-tip"><div class="callout-title">.*Tip/s);
+    assert.match(markdown('> just a quote', false), /^<blockquote>/);
+    const src = '---\ntags: [a, b]\ntitle: Hi\n---\n# Note\n\nbody\n';
+    assert.match(markdown(src), /^<div class="properties"><table><tbody><tr><th>tags<\/th><td><span class="tag" data-tag="a">#a<\/span>, <span class="tag" data-tag="b">#b<\/span><\/td><\/tr><tr><th>title<\/th><td>Hi<\/td><\/tr>/);
+    const { blocks } = markdownResponse({ text: src, blocks: true });
+    assert.equal(blocks.map((b) => b.raw).join(''), src);
+    assert.equal(blocks[0].raw, '---\ntags: [a, b]\ntitle: Hi\n---\n');
+    assert.ok(blocks[0].html.includes('class="properties"'));
+  } finally {
+    setSanitizer(null);
+  }
+});

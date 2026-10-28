@@ -15,6 +15,7 @@ export function extensionHostMain(createVSCode, installResources, runtime = null
   const cmds = new Map();
   const subs = new Map();
   const providers = new Map();
+  const noteRenderers = new Map();
   const views = new Map();
   const call = (m, ...a) => new Promise((res, rej) => {
     if (!port) { rej(new Error('the extension host is not connected')); return; }
@@ -113,6 +114,16 @@ export function extensionHostMain(createVSCode, installResources, runtime = null
         return disposable(() => { providers.delete(id); call('agents.unregister', id).catch(() => {}); });
       },
     },
+    notes: {
+      // inline `name: source` code and ```name fences in rendered notes, drawn from what
+      // fn({kind, source, path}) resolves with: markdown, rendered as the note is
+      registerRenderer(name, fn, opts = {}) {
+        const n = String(name).toLowerCase();
+        noteRenderers.set(n, fn);
+        call('notes.register', n, { inline: opts.inline !== false, fence: opts.fence !== false }).catch((e) => console.error(e.message));
+        return disposable(() => { noteRenderers.delete(n); call('notes.unregister', n).catch(() => {}); });
+      },
+    },
     onDidRunFile: on('run'),
   };
   const clone = (v) => { try { return structuredClone(v); } catch { return undefined; } };
@@ -152,6 +163,12 @@ export function extensionHostMain(createVSCode, installResources, runtime = null
           const fn = providers.get(m.pid);
           if (!fn) throw new Error(`agent '${m.pid}' isn't registered`);
           return fn({ ...m.req, progress: (text) => call('agents.progress', m.rid, String(text)).catch(() => {}) });
+        }));
+      } else if (m.t === 'noteRender') {
+        reply(m.id, Promise.resolve().then(() => {
+          const fn = noteRenderers.get(m.name);
+          if (!fn) throw new Error(`notes plugin '${m.name}' isn't registered`);
+          return fn(m.req);
         }));
       } else if (m.t === 'event') {
         for (const fn of subs.get(m.name) || []) { try { fn(m.data); } catch (err) { console.error(err); } }

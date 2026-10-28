@@ -45,7 +45,9 @@ const anyCodeDirty = () => [...editors.values()].some((ed) => ed.dirty());
 window.addEventListener('beforeunload', (e) => { if (anyCodeDirty()) e.preventDefault(); });
 
 // opts.bare: no bar of its own, for a host that draws its own (the ide), told
-// of every change by opts.onState
+// of every change by opts.onState. opts.markdownView(el, file): a rendered note's
+// blocks, for the host's links, images and embeds; opts.pasteImage(blob, file): an
+// image pasted into a note saved, resolving with the link to type in
 function codeEditor(view, file, btn, id, opts = {}) {
   // a converted VS Code extension's language or grammar over the host's (vsx-contributions.js)
   let lang = contributedLang(file.path, codeLang(file.path)) || { hl: 'plaintext', check: '', comment: '' };
@@ -114,6 +116,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
   out.append(outHead, outList);
   // markdown rendered, each block its source again on a double click
   const mdView = Object.assign(el('div', 'code-md'), { hidden: true, tabIndex: -1 });
+  mdView.dataset.notePath = file.path;
   view.append(bar, scroller, mdView, out, overview);
   const diskNotice = Object.assign(el('div', 'code-disk-notice'), { hidden: true });
   const diskMessage = el('span');
@@ -288,6 +291,12 @@ function codeEditor(view, file, btn, id, opts = {}) {
   let bookmarks = [];
   // this tab's own id in the session, its own caret never drawn
   let me = 0;
+  // someone else in the file: edits go to them as typed, the session saving them soon after.
+  // Alone (a local file, a remote one no one else has open) they're held here until a save
+  // asks for them, Ctrl+S, as an editor's are
+  const shared = () => people.some((p) => !p.agent && (me ? p.id !== me : p.name !== name));
+  // the session's text the held edits were made on, when the socket dropped with them unsent
+  let heldBase = null;
   let opSeq = 0;
   const canWrite = () => perms.includes('w');
   const sameOps = (a, b) => Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i]);
@@ -1099,8 +1108,9 @@ function codeEditor(view, file, btn, id, opts = {}) {
     }, 150);
   }
 
-  // --- markdown rendered: the source's blocks drawn, one edited at a time in place ---
-  const MD_KEY = 'phosphorus-md-rendered';
+  // --- markdown rendered: the source's blocks drawn, one edited at a time in place, a click
+  // on a block opening its source there. Rendered unless the source was last asked for ---
+  const MD_KEY = 'sulfur-md-source';
   let rendered = false;
   let mdEditing = null;
   let mdTimer = 0;
@@ -1110,8 +1120,8 @@ function codeEditor(view, file, btn, id, opts = {}) {
     scroller.hidden = rendered;
     mdView.hidden = !rendered;
     viewBtn.textContent = rendered ? 'source' : 'view';
-    viewBtn.title = rendered ? 'back to the markdown source' : 'show it rendered, a block edited on a double click';
-    if (isMd) try { localStorage.setItem(MD_KEY, rendered ? '1' : ''); } catch {}
+    viewBtn.title = rendered ? 'back to the markdown source' : 'show it rendered, a block edited where it is clicked';
+    if (isMd) try { localStorage.setItem(MD_KEY, rendered ? '' : '1'); } catch {}
     if (rendered) paintMd(); else if (mdEditing) mdEditing.box.blur();
   }
   let mdSeq = 0;
@@ -1127,8 +1137,11 @@ function codeEditor(view, file, btn, id, opts = {}) {
       const d = el('div', 'md-block');
       renderMd(d, b.raw.replace(/\n+$/, ''), false, b.html);
       if (edit) {
-        d.title = 'double click to edit';
-        d.addEventListener('dblclick', (e) => { if (!e.target.closest('input, a, summary')) editBlock(d, b); });
+        // a click edits, not one on a link, a box, a plugin's button or a selection made
+        d.addEventListener('click', (e) => {
+          if (e.target.closest('input, a, summary, button, .md-plugin, .md-embed') || String(getSelection?.() || '')) return;
+          editBlock(d, b);
+        });
         d.querySelectorAll('li.task input').forEach((box, i) => {
           box.disabled = false;
           box.addEventListener('change', () => tickTask(b, i, box.checked));
@@ -1147,7 +1160,36 @@ function codeEditor(view, file, btn, id, opts = {}) {
       mdView.append(add);
     }
     mdView.scrollTop = top;
+    // links, images and embeds made the host's: found as files, opened where they are
+    opts.markdownView?.(mdView, file);
   }
+  // a block painted later (its html still on its way) given the same
+  mdView.addEventListener('md-painted', (e) => { if (rendered && e.target !== mdView && mdView.contains(e.target)) opts.markdownView?.(e.target, file); });
+  // an image pasted into a note: saved by the host (into the notes' images), its link typed in
+  async function pasteImage(e, put) {
+    if (!isMd || !opts.pasteImage || !canWrite()) return false;
+    const image = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith('image/'));
+    if (!image) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    paintState('saving the image…');
+    try {
+      const link = await opts.pasteImage(image, file);
+      if (link && !closed) put(link);
+      paintState();
+    } catch (err) {
+      paintState(`image not saved: ${err.message}`);
+    }
+    return true;
+  }
+  mdView.addEventListener('paste', (e) => {
+    if (mdEditing || !canWrite()) return;
+    pasteImage(e, (link) => {
+      const t = ta.value;
+      ta.setRangeText(`${!t || t.endsWith('\n\n') ? '' : t.endsWith('\n') ? '\n' : '\n\n'}${link}\n`, t.length, t.length, 'end');
+      ta.dispatchEvent(new Event('input'));
+    });
+  });
   // a task's [ ] or [x] flipped in the source, its block found again if it moved
   function tickTask(b, i, on) {
     const marks = [...b.raw.matchAll(/^[ \t>]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX])\]/gm)];
@@ -1185,6 +1227,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
       paintMd();
     };
     box.addEventListener('input', grow);
+    box.addEventListener('paste', (e) => { pasteImage(e, (link) => { box.setRangeText(link, box.selectionStart, box.selectionEnd, 'end'); grow(); }); });
     box.addEventListener('blur', () => done(true));
     box.addEventListener('keydown', (e) => {
       const mod = e.ctrlKey || e.metaKey;
@@ -1318,7 +1361,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
       btn.classList.toggle('dirty', d);
       btn.querySelector('.tab-label').textContent = `${codeName(file)}${d ? ' •' : ''}`;
     }
-    stateEl.textContent = note || (!ready ? 'connecting' : !canWrite() ? 'read-only' : saved < 0 && !ta.value ? 'new file' : d ? (localOnly ? 'unsaved local changes' : 'saving') : 'saved');
+    stateEl.textContent = note || (!ready ? 'connecting' : !canWrite() ? 'read-only' : saved < 0 && !ta.value ? 'new file' : d ? (localOnly ? 'unsaved local changes' : inflight || wantSave || shared() ? 'saving' : 'unsaved') : 'saved');
     stateEl.classList.toggle('bad', !!note);
     saveBtn.disabled = !ready || !canWrite();
     ta.readOnly = !ready || !canWrite();
@@ -1355,7 +1398,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
   // --- the session ---
   function flush() {
     if (localOnly) return;
-    if (inflight || !ready || !canWrite() || ta.value === S) return;
+    if (inflight || !ready || !canWrite() || ta.value === S || (!wantSave && !shared())) return;
     const text = ta.value;
     inflight = { id: `${id}-${opSeq += 1}`, ops: opDiff(S, text), text };
     say({ type: 'op', base: V, ops: inflight.ops, id: inflight.id });
@@ -1405,6 +1448,10 @@ function codeEditor(view, file, btn, id, opts = {}) {
       try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.type === 'init' || msg.type === 'resync') {
         const lost = ready && ta.value !== S && ta.value !== msg.text;
+        // edits held here when the socket dropped, put onto the text the session came back with
+        const base = msg.type === 'init' ? heldBase : null;
+        heldBase = null;
+        const mine = base !== null && ta.value !== base ? opDiff(base, ta.value) : null;
         S = msg.text;
         V = msg.v;
         saved = msg.saved;
@@ -1416,8 +1463,10 @@ function codeEditor(view, file, btn, id, opts = {}) {
         if (msg.eol) eolMode = msg.eol === '\r\n' ? 'CRLF' : 'LF';
         inflight = null;
         ready = true;
-        setText(S, true);
+        if (mine) { const [, theirs] = opTransform(mine, opDiff(base, S)); setText(opApply(ta.value, theirs), true); }
+        else setText(S, true);
         sameS();
+        flush();
         paintState(lost ? 'edit dropped' : '');
         if (msg.type === 'init' && !view.dataset.seen) { view.dataset.seen = '1'; ta.setSelectionRange(0, 0); }
       } else if (msg.type === 'op') {
@@ -1454,6 +1503,8 @@ function codeEditor(view, file, btn, id, opts = {}) {
         paintState(msg.conflict ? 'disk changes need review' : '');
       } else if (msg.type === 'people') {
         people = Array.isArray(msg.people) ? msg.people : [];
+        // someone came in: what was held goes to them now
+        flush();
         paintState();
         paintMarks();
       } else if (msg.type === 'error') {
@@ -1462,6 +1513,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
       }
     };
     sock.onclose = () => {
+      if (ready && !inflight && ta.value !== S) heldBase = S;
       ready = false;
       inflight = null;
       if (closed) return;
@@ -1623,6 +1675,10 @@ function codeEditor(view, file, btn, id, opts = {}) {
     typeIn(from, to, '', from);
   });
   ta.addEventListener('paste', (e) => {
+    if (!ta.readOnly && [...(e.clipboardData?.files || [])].some((f) => f.type.startsWith('image/'))) {
+      pasteImage(e, (link) => typeIn(ta.selectionStart, ta.selectionEnd, link));
+      return;
+    }
     const text = e.clipboardData?.getData('text/plain');
     if (ta.readOnly || !lineClip || text?.replace(/\r\n/g, '\n') !== lineClip || ta.selectionStart !== ta.selectionEnd) return;
     e.preventDefault();
@@ -1778,7 +1834,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     stateEl.textContent = said;
     setTimeout(() => paintState(), 3000);
   }));
-  if (isMd) { let on = false; try { on = localStorage.getItem(MD_KEY) === '1'; } catch {} setRendered(on); }
+  if (isMd) { let on = true; try { on = localStorage.getItem(MD_KEY) !== '1'; } catch {} setRendered(on); }
   outClose.addEventListener('click', () => { out.hidden = true; });
   // the gutter scrolled with the text, kept at the left edge
   scroller.addEventListener('click', (e) => { if (e.target === scroller || e.target === body) ta.focus({ preventScroll: true }); });

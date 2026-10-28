@@ -80,11 +80,30 @@ extends the history in batches of 100. Commit and file context menus include cop
 and navigation operations. The command palette also exposes **Git: Open Source
 Control Graph** and **Git: View History**.
 
+Repositories that keep files in Git LFS (a `filter=lfs` pattern in any
+`.gitattributes`) get a **Git LFS** box in Source Control: the tracked patterns,
+the git-lfs version on the machine running git, and how many LFS files are still
+pointers. **Pull LFS Files** (also **Git LFS: Pull Files** in the palette) brings
+them down; **Git LFS: Install Hooks in This Repository** runs
+`git lfs install --local`. When git-lfs is missing, or files are not downloaded,
+a notification says so once per repository, and opening an LFS pointer file says
+what it is.
+
+Markdown files open rendered, as [notes](sulfur-notes.md): click a block to edit
+its source in place, and `Ctrl+Shift+V` (**Markdown: Toggle Preview**) switches to
+the whole source and back. Sulfur remembers which you chose last.
+
 Open files on a workspace machine are checked for external saves once a second
 by one watcher on that machine. Unchanged files require metadata checks only.
 Clean buffers reload automatically through the collaboration protocol, retaining
 mapped cursors and updating language services. Atomic file replacements are
 detected as well as ordinary writes.
+
+Edits reach the disk when you save (`Ctrl+S`, Save All) while you are the only
+person with the file open, local or remote. While someone else has it open, edits
+are shared as you type and saved shortly after typing stops, so everyone sees
+the same file. Edits held when a connection drops are put back onto the file's
+text when it reconnects.
 
 If an external change conflicts with unsaved editor changes, autosave pauses.
 The banner lets you review the disk version, keep the editor version, or reload
