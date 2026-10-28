@@ -107,13 +107,33 @@ impl Pty {
             stopped: false.into(),
         });
         let (drained_tx, drained_rx) = std::sync::mpsc::channel::<()>();
+        let answerer = pty.clone();
         std::thread::spawn(move || {
             let mut buf = vec![0u8; 64 * 1024];
+            // ConPTY inherits the cursor: conhost asks where it is (ESC[6n) as it starts and
+            // holds the child's output until that's answered, which a page may never do
+            let mut asked = !cfg!(windows);
+            let mut seen = 0;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        if output.send(Bytes::copy_from_slice(&buf[..n])).is_err() {
+                        let mut chunk = &buf[..n];
+                        let mut rest = Vec::new();
+                        if !asked {
+                            if let Some(at) = chunk.windows(4).position(|w| w == b"\x1b[6n") {
+                                asked = true;
+                                answerer.input(b"\x1b[1;1R");
+                                rest = [&chunk[..at], &chunk[at + 4..]].concat();
+                                chunk = &rest;
+                            }
+                            seen += n;
+                            asked |= seen > 4096;
+                        }
+                        if chunk.is_empty() {
+                            continue;
+                        }
+                        if output.send(Bytes::copy_from_slice(chunk)).is_err() {
                             break;
                         }
                     }
@@ -592,7 +612,8 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let cmd = if cfg!(windows) { "echo sulfur-pty" } else { "printf sulfur-pty" };
         let (_pty, exited) = Pty::spawn(Spawn { dir: None, cols: 80, rows: 24, cmd: Some(cmd.into()), env: vec![] }, tx).unwrap();
-        assert_eq!(exited.await.unwrap(), 0);
+        let code = tokio::time::timeout(Duration::from_secs(30), exited).await.expect("the terminal never exited");
+        assert_eq!(code.unwrap(), 0);
         let mut out = Vec::new();
         while let Ok(b) = rx.try_recv() {
             out.extend_from_slice(&b);
