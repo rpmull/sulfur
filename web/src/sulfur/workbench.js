@@ -498,6 +498,7 @@ const SETTINGS = {
   'editor.enablePreview': { def: true, type: 'boolean', title: 'Workbench › Editor: Enable Preview', about: 'Controls whether a file opened from the explorer is shown as a preview, its tab reused until you edit it or double click.' },
   'explorer.confirmDelete': { def: true, type: 'boolean', title: 'Explorer: Confirm Delete', about: 'Controls whether the explorer asks before deleting a file or folder. A delete here is for good: there is no trash.' },
   'explorer.autoReveal': { def: true, type: 'boolean', title: 'Explorer: Auto Reveal', about: 'Controls whether the explorer reveals and selects the active file.' },
+  'git.autofetch': { def: true, type: 'boolean', title: 'Git: Autofetch', about: 'Fetch the branch’s upstream when a folder opens and every three minutes after, so Source Control shows the commits waiting to be pulled.' },
   'search.exclude': { def: 'build, out, bin, obj, target, .vs, .vscode, cmake-build-*, dist, .cache, .gradle, __pycache__, node_modules, .git', type: 'string', title: 'Search: Exclude', about: 'Comma separated folder names or simple globs left out of quick open (Ctrl+P) and Find in Files, as a big project’s build outputs and caches are; the explorer still shows them.' },
   'files.exclude': { def: '.git, node_modules, __pycache__, .DS_Store', type: 'string', title: 'Files: Exclude', about: 'Comma separated names (node_modules), extensions (.meta hides every *.meta file), globs (*.o, *.{png,jpg}) or paths (build/cache) hidden from the explorer, quick open and search. VS Code\'s **/ forms work too.' },
   'terminal.integrated.fontSize': { def: 13, type: 'number', min: 8, max: 40, title: 'Terminal › Integrated: Font Size', about: 'Controls the font size in pixels of the terminal. New terminals take it.' },
@@ -7152,6 +7153,28 @@ async function scmRefresh(loud = false) {
   if (loud && s.why && s.why !== 'none') notify('error', `Source Control: ${s.why}`);
   paintScm();
   paintStatus();
+  scmAutoFetch(s, where);
+}
+
+// the upstream fetched quietly when a repository with one is first seen and every few
+// minutes after: status alone counts against what the last fetch brought, 0↓ until then
+const AUTO_FETCH_MS = 3 * 60 * 1000;
+const scmFetched = new Map();
+function scmAutoFetch(s, where) {
+  if (!setting('git.autofetch') || !s.upstream || !s.top || !where) return;
+  const id = `${s.host}\n${s.top}`;
+  const last = scmFetched.get(id);
+  if (last && (last.running || Date.now() - last.at < AUTO_FETCH_MS)) return;
+  const entry = { running: true, at: Date.now() };
+  scmFetched.set(id, entry);
+  git(['fetch', '--prune'], { where })
+    .catch(() => null)
+    .then((r) => {
+      entry.running = false;
+      entry.at = Date.now();
+      if (r && I?.scm?.host === s.host && I.scm.top === s.top) scmRefresh();
+      setTimeout(() => { if (I?.scm?.host === s.host && I.scm.top === s.top) scmRefresh(); }, AUTO_FETCH_MS);
+    });
 }
 
 function paintScm() {
