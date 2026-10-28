@@ -212,3 +212,68 @@ async fn a_task_streams_and_reports_its_exit() {
     assert_eq!(code, Some(json!(3)));
     svc.stop().await;
 }
+
+#[tokio::test]
+async fn ssh_hosts_are_saved_without_secrets_and_never_reached_unconnected() {
+    let dir = tempfile::tempdir().unwrap();
+    let svc = service(dir.path(), json!({ "custom": 1 })).await;
+    let o = svc.origin.clone();
+    let http = client();
+    let post = |path: &str, b: Value| http.post(format!("{o}{path}")).header("origin", &o).body(b.to_string()).send();
+    let info = body(http.get(format!("{o}/api/sidecar/info")).send().await.unwrap()).await;
+    assert_eq!(info["ssh"]["kind"], "ssh");
+    assert_eq!(info["ssh"]["hosts"], json!([]));
+    assert!(!info["ssh"]["caps"].as_array().unwrap().contains(&json!("home")));
+    // an SSH host is never linked as the mesh
+    let linked = post("/api/sidecar/mode", json!({ "mode": "link", "kind": "ssh", "server": "box" })).await.unwrap();
+    assert_eq!(linked.status(), 400);
+
+    let added = body(post("/api/sidecar/ssh/add", json!({ "address": "user@172.18.220.63:/usr/arconic/ccm" })).await.unwrap()).await;
+    assert_eq!(added["host"]["name"], "172-18-220-63");
+    assert_eq!(added["host"]["connected"], false);
+    assert_eq!(added["path"], "/usr/arconic/ccm");
+    let saved: Value = serde_json::from_slice(&std::fs::read(dir.path().join("sulfur.json")).unwrap()).unwrap();
+    assert_eq!(saved["custom"], 1);
+    assert_eq!(saved["ssh"], json!([{ "name": "172-18-220-63", "host": "172.18.220.63", "port": 22, "user": "user", "key": "" }]));
+
+    // not connected: its API refuses rather than reach for this computer's files
+    let files = http.get(format!("{o}/api/ssh/172-18-220-63/api/files/172-18-220-63/list?share=0&path=")).send().await.unwrap();
+    assert_eq!(files.status(), 503);
+    assert_eq!(http.get(format!("{o}/api/ssh/nobody/api/files/nobody/list")).send().await.unwrap().status(), 404);
+    let foreign = http.post(format!("{o}/api/ssh/172-18-220-63/api/sulfur/git")).body("{}").send().await.unwrap();
+    assert_eq!(foreign.status(), 403, "only Sulfur's page reaches an SSH host");
+
+    // a machine that answers but isn't an SSH server: refused plainly, with no secret kept
+    let not_ssh = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = not_ssh.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = not_ssh.accept().await {
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut s, b"HTTP/1.0 400 Bad Request\r\n\r\n").await;
+        }
+    });
+    let local = body(post("/api/sidecar/ssh/add", json!({ "address": format!("ssh://me@127.0.0.1:{port}") })).await.unwrap()).await;
+    let name = local["host"]["name"].as_str().unwrap().to_owned();
+    let refused = post("/api/sidecar/ssh/connect", json!({ "name": name, "password": "hunter2" })).await.unwrap();
+    assert!(refused.status().is_client_error() || refused.status().is_server_error());
+    assert!(body(refused).await["error"].as_str().is_some());
+    let saved = std::fs::read_to_string(dir.path().join("sulfur.json")).unwrap();
+    assert!(!saved.contains("hunter2"), "a password never reaches the settings file");
+
+    let forgot = body(post("/api/sidecar/ssh/forget", json!({ "name": "172-18-220-63" })).await.unwrap()).await;
+    assert_eq!(forgot["hosts"].as_array().unwrap().len(), 1);
+    assert_eq!(post("/api/sidecar/ssh/forget", json!({ "name": "172-18-220-63" })).await.unwrap().status(), 404);
+
+    // the page listening for git's prompts
+    let mut req = format!("{}/api/sulfur/asks", o.replace("http:", "ws:")).into_client_request().unwrap();
+    req.headers_mut().insert("origin", HeaderValue::from_str(&o).unwrap());
+    let (ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    for _ in 0..100 {
+        if svc.app.asks.listening() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(svc.app.asks.listening());
+    drop(ws);
+    svc.stop().await;
+}

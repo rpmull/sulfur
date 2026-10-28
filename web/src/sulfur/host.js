@@ -6,6 +6,7 @@
 
 import { themeFromStorage } from '../theme.js';
 import { meshPeers } from './mesh.js';
+import { sshPath } from './ssh.js';
 
 // the page's vendor files, hashed by the build
 export const ASSETS = __ASSETS__;
@@ -23,6 +24,10 @@ export const dk = { creds: new Map() };
 let meshHosts = [];
 // offline, the remembered mesh's machines, while its login holds
 let linkHosts = [];
+// SSH hosts the app's own server reaches: every name it has saved this page's life (an
+// open tab of one never falls to another host's API), and those connected now
+let sshNames = new Set();
+let sshLive = [];
 
 // --- small helpers, as app.js's ------------------------------------------------------
 
@@ -110,7 +115,7 @@ export const homeOnline = () => [...new Set([selfHost, ...meshHosts].filter(Bool
 // this computer on a mesh's page, unless it's one of the mesh's own machines
 const localExtra = () => (standalone.mode === 'mesh' && standalone.localHost && !meshHosts.includes(standalone.localHost) ? [standalone.localHost] : []);
 // the machines Sulfur reaches beside the home's: this computer, and offline a remembered mesh's
-export const otherHosts = () => [...localExtra(), ...(standalone.mode === 'local' ? linkHosts : [])];
+export const otherHosts = () => [...localExtra(), ...(standalone.mode === 'local' ? [...linkHosts, ...sshLive.filter((h) => !linkHosts.includes(h))] : [])];
 export function dkLiveHosts() {
   const up = new Set([...homeOnline(), ...otherHosts()]);
   return [...dk.creds.keys()].filter((h) => up.has(h));
@@ -118,6 +123,7 @@ export function dkLiveHosts() {
 // a host's API path as this page reaches it: this computer through the app's own
 // server under /api/local/ on a mesh's page, a mesh's machine under /api/mesh/ offline
 export function hostUrl(host, path) {
+  if (standalone.mode === 'local' && sshNames.has(host)) return sshPath(host, path);
   if (localExtra().includes(host)) return `/api/local${path}`;
   if (standalone.mode === 'local' && host !== selfHost) return `/api/mesh${path}`;
   return path;
@@ -256,6 +262,8 @@ export function bootLocal(info) {
     standalone.meshVault = vault;
     dk.creds.set(host, { user, pass });
   };
+  standalone.asks = !!info.asks;
+  takeSsh(info.ssh);
   filesWin = ({ loc, dir }) => {
     const sh = hostsInfo[selfHost]?.files?.shares?.find((x) => x.id === String(loc.share));
     if (!sh) return;
@@ -452,6 +460,90 @@ export async function sidecarMode(mode, server = '', kind = standalone.mesh?.kin
   }
   return r;
 }
+// --- SSH hosts, offline: saved by address, connected with a key or a password ---------------
+
+// the app's own server's SSH hosts taken in: the connected ones as machines here, their
+// facts and logins; a host dropped takes its machine away
+function takeSsh(ssh) {
+  if (!ssh || typeof ssh !== 'object') return;
+  const hosts = Array.isArray(ssh.hosts) ? ssh.hosts : [];
+  const was = sshLive.join(' ');
+  const live = hosts.filter((h) => h.connected && h.info).map((h) => h.name);
+  for (const h of sshLive) if (!live.includes(h)) { dk.creds.delete(h); delete hostsInfo[h]; }
+  for (const h of hosts) {
+    sshNames.add(h.name);
+    if (!live.includes(h.name)) continue;
+    hostsInfo[h.name] = h.info;
+    dk.creds.set(h.name, { user: h.user, pass: '' });
+  }
+  sshLive = live;
+  standalone.ssh = { ...ssh, hosts };
+  if (was !== live.join(' ')) standalone.onHosts?.();
+}
+async function sshCall(path, body, wait = 8000) {
+  const r = await getJSON(path, { ...(body ? jsonPost(body) : {}), signal: AbortSignal.timeout(wait) }).catch((err) => ({ ok: false, error: err.message }));
+  return r;
+}
+export async function sshRefresh() {
+  const r = await sshCall('/api/sidecar/ssh');
+  if (r.ok) takeSsh(r);
+  return standalone.ssh;
+}
+// a host saved from its address (user@host, user@host:2222, user@host:/folder): { host, path }
+export async function sshAdd(address, key = '') {
+  const r = await sshCall('/api/sidecar/ssh/add', { address, key });
+  if (r.ok) await sshRefresh();
+  return r;
+}
+// a host connected; answers: { password, passphrase, trust, remember }. Refused with
+// need 'password', 'passphrase' or 'trust' (and the host key's fingerprint) to ask the user
+export async function sshConnect(name, answers = {}) {
+  const r = await sshCall('/api/sidecar/ssh/connect', { name, ...answers }, 90000);
+  if (r.ok) await sshRefresh();
+  return r;
+}
+export async function sshDisconnect(name) {
+  const r = await sshCall('/api/sidecar/ssh/disconnect', { name });
+  if (r.ok) takeSsh(r);
+  return r;
+}
+export async function sshForget(name) {
+  const r = await sshCall('/api/sidecar/ssh/forget', { name });
+  if (r.ok) takeSsh(r);
+  return r;
+}
+
+// git's prompts put to the page (an SSH password, a passphrase, a new host's key):
+// onAsk(m) resolves to { value, remember } or null to refuse; onDone(id) when one was
+// answered elsewhere or timed out. Returns the stop
+export function listenAsks(onAsk, onDone = () => {}) {
+  let ws = null;
+  let stopped = false;
+  const connect = () => {
+    const s = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/sulfur/asks`);
+    ws = s;
+    s.onmessage = async (ev) => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === 'done') { onDone(m.id); return; }
+      if (m.type !== 'ask') return;
+      const a = await Promise.resolve(onAsk(m)).catch(() => null);
+      if (s.readyState !== WebSocket.OPEN) return;
+      s.send(JSON.stringify(a ? { type: 'answer', id: m.id, value: String(a.value ?? ''), remember: !!a.remember } : { type: 'cancel', id: m.id }));
+    };
+    s.onclose = () => { if (!stopped && ws === s) setTimeout(() => { if (!stopped) connect(); }, 3000); };
+    s.onerror = () => s.close();
+  };
+  connect();
+  return () => { stopped = true; ws?.close(); };
+}
+standalone.sshRefresh = sshRefresh;
+standalone.sshAdd = sshAdd;
+standalone.sshConnect = sshConnect;
+standalone.sshDisconnect = sshDisconnect;
+standalone.sshForget = sshForget;
+standalone.listenAsks = listenAsks;
+
 standalone.meshUrl = meshUrl;
 standalone.meshMe = meshMe;
 standalone.meshLogIn = meshLogIn;

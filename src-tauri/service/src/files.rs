@@ -17,9 +17,9 @@ use crate::util::{
     fail, fail_at, glob_match, home_dir, locale_compare, safe_path, skipper, Fail, Res, MAX_TEXT,
 };
 
-const LIST_MAX: usize = 5000;
-const TREE_MAX: usize = 60000;
-const UPLOAD_PREFIX: &str = ".phosphorus-upload-";
+pub(crate) const LIST_MAX: usize = 5000;
+pub(crate) const TREE_MAX: usize = 60000;
+pub(crate) const UPLOAD_PREFIX: &str = ".phosphorus-upload-";
 pub const UPLOAD_MAX: u64 = 64 << 30;
 
 #[derive(Debug, Clone, Serialize)]
@@ -598,7 +598,7 @@ fn drop_upload(u: Option<Upload>) {
 }
 
 /// a byte offset or size as Number() reads it: blank is 0
-fn parse_count(s: &str) -> Option<u64> {
+pub(crate) fn parse_count(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
         return Some(0);

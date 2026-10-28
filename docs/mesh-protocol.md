@@ -99,8 +99,10 @@ computer's part itself, so it works offline.
 | `forgejo` | `/api/sulfur/forgejo` | — | the mesh's Forgejo |
 
 Sulfur's server reports the linked mesh's kind and capabilities in `/api/sidecar/info` as
-`mesh: { kind, version: 1, caps }`. `PROVIDERS` in `src-tauri/service/src/mesh.rs` lists the kinds. Only `phosphorus` is implemented
-today. The overlay integrations below are extension designs, not working providers.
+`mesh: { kind, version: 1, caps }`. `PROVIDERS` in `src-tauri/service/src/mesh.rs` lists the
+kinds: `phosphorus`, linked as the mesh, and `ssh`, which Sulfur's own server serves beside
+whichever mesh is linked (see [SSH hosts](#ssh-hosts)). The overlay integrations below are
+extension designs, not working providers.
 
 ### State and compatibility
 
@@ -140,6 +142,100 @@ requests and file/session messages. An incompatible future protocol needs an exp
 version and migration, never an implicit reinterpretation of a field. Sulfur and Phosphorus
 can release independently once Phosphorus pins a published compatible Sulfur version.
 
+## SSH hosts
+
+A machine reached with `ssh user@host` works as a host with no mesh at all: its files,
+live editing, terminals, builds and runs, Git and toolchains. Sulfur's own server holds the
+SSH connection (`src-tauri/service/src/ssh.rs`, on [russh](https://crates.io/crates/russh)
+and [russh-sftp](https://crates.io/crates/russh-sftp)) and serves each saved host under
+`/api/ssh/<name>/` with the same version 1 APIs a mesh host gives under `/api/mesh/`:
+
+| capability | calls under `/api/ssh/<name>` | over |
+|------------|-------------------------------|------|
+| `files` | `/api/files/<name>/{info,list,tree,search,read,download,upload,save,mkdir,rename,delete}` | SFTP |
+| `sessions` | `/api/code/<name>?share=…&path=…` (socket): the same live sessions, the file watched every 1.5 s | SFTP |
+| `terminals` | `/api/term/<name>?sid=…` (socket): the login shell in a pseudo-terminal, kept ten minutes for a reloaded page | an SSH channel with a PTY |
+| `runs` | `/api/sulfur/run` (socket) | an SSH channel with a PTY |
+| `git` | `/api/sulfur/git` (POST): the verbs and refusals of this computer's Git | an SSH exec channel |
+| `toolchains` | `/api/sulfur/toolchains` | an SSH exec channel |
+
+The `ssh` provider advertises exactly those (plus `hosts`). It has no merged `home` (each
+host's home is its own), and no `people`, `agents`, `models`, `forgejo`, `languages`,
+`sqlite` or `vsx`. It is never linked as the mesh: `/api/sidecar/mode` refuses it.
+
+The page finds the hosts in `/api/sidecar/info` as `ssh: { kind, version, caps, hosts }`,
+each host `{ name, host, port, user, key, connected, info }`, `info` being the host's facts
+as `/api/state` gives them (platform, shell, home, shares: the folder holding the user's
+home as `home`, `/` as `0`). It manages them with:
+
+| call | does |
+|------|------|
+| `GET /api/sidecar/ssh` | the provider and its hosts |
+| `POST /api/sidecar/ssh/add` `{ address, key?, name? }` | saves a host from `user@host`, `user@host:2222`, `ssh://user@host:2222/path` or scp's `user@host:/path`; answers `{ host, path }`, the path to open once connected |
+| `POST /api/sidecar/ssh/connect` `{ name, password?, passphrase?, trust?, remember? }` | connects; a 401 with `need` says what to ask: `trust` (a new host key, its `fingerprint`), `password` or `passphrase` |
+| `POST /api/sidecar/ssh/disconnect` `{ name }` | saves its open files, ends its terminals, closes the connection |
+| `POST /api/sidecar/ssh/forget` `{ name }` | disconnects it and removes it |
+
+A host's name is an API host name (lowercase letters, digits and dashes): a DNS name's
+first label or the whole address (`172-18-220-63`), never this computer's. The page routes
+every saved name to `/api/ssh/<name>/` for the page's life, so an open tab of a dropped
+host never reaches another host or this computer's files.
+
+**Host keys** are checked against `~/.ssh/known_hosts`, the file `ssh` itself uses. A host
+not in it is refused with its SHA-256 fingerprint until the user trusts that exact key,
+which is then added there; a key that differs from the known one is refused outright,
+naming the line to remove if the machine was reinstalled.
+
+**Logins** go as `ssh` tries them: ssh-agent (`SSH_AUTH_SOCK`, or Windows OpenSSH's
+`\\.\pipe\openssh-ssh-agent`), then `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa` (or the
+one key a host names), then a password, through `password` or a one-prompt
+`keyboard-interactive`. A key's passphrase is asked for when it's the host's named key, or
+when the server takes no passwords. Saved hosts are written to the app's settings
+(`sulfur.json`'s `ssh` list) without anything typed for them. A password or passphrase
+lives only in the service's memory: while the host is connected (to reconnect quietly
+after a network drop, at most every ten seconds, so a server's MaxAuthTries and fail2ban
+aren't tripped), and after a disconnect only when the page's `sulfur.ssh.rememberPasswords`
+setting says so, until Sulfur quits. Nothing is written to disk or to the OS keychain.
+
+Remote commands run through `sh -c` whatever the login shell is; a task's PATH gets the
+toolchains' usual folders, as on this computer.
+
+Not there yet:
+
+- language servers, SQLite and Open VSX conversion on an SSH host (`languages`, `sqlite`, `vsx`);
+- Windows SSH servers: hosts are taken to be Unix-like (Linux, macOS, the BSDs);
+- `~/.ssh/config` (its `Host` aliases, `ProxyJump`, `IdentityFile`), Pageant, certificates and
+  security keys;
+- connecting again after Sulfur restarts: a saved host is connected from Remote: Connect to
+  SSH Host, never on its own, and a folder of it that was open falls back to the home;
+- a share's confinement on the host is by path only (`..` refused); symlinks are followed
+  as SFTP follows them, with the login's own permissions.
+
+### Git's prompts
+
+This computer's Git, run for the page by `/api/sulfur/git`, never waits on a terminal it
+doesn't have. For `clone`, `fetch`, `pull`, `push`, `remote` and `lfs pull`/`fetch`:
+
+- unless the user has their own (`GIT_SSH_COMMAND`, `GIT_SSH` or `core.sshCommand`), ssh
+  runs as `ssh -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4`;
+- with a page listening on `/api/sulfur/asks` (a socket) and the app's executable known,
+  `SSH_ASKPASS` and `GIT_ASKPASS` are that executable, with `SSH_ASKPASS_REQUIRE=force`
+  (OpenSSH 8.4 or later) and `SULFUR_ASKPASS=<port>:<token>`. Run that way it hands the
+  prompt to the service over loopback with the run's token, the service to the page as
+  `{ type: 'ask', id, prompt, secret }`, and the first `{ type: 'answer', id, value, remember }`
+  goes back to ssh; `{ type: 'cancel', id }`, three minutes unanswered, or no page refuses
+  it. The page asks in its input box, masked for a password, passphrase or code;
+- with nobody to answer, or for a `quiet` request (the page's autofetch), ssh gets
+  `-o BatchMode=yes` and a login that needs a password fails at once instead of at the
+  run's 900 s limit.
+
+An answer is kept only with `remember` (the page sends it under
+`sulfur.ssh.rememberPasswords`), in memory, until Sulfur quits; a kept answer that's asked
+for again in the same run is taken as refused and dropped. The `-c`, `--upload-pack`,
+`--receive-pack`, `--exec`, `--config` and `-u` refusals stand for SSH addresses as for any.
+Git run on an SSH host runs there with `GIT_TERMINAL_PROMPT=0` and no terminal: that host's
+own remotes need its own keys.
+
 ## Adding a kind of mesh
 
 A provider is an entry `{kind, version: 1, caps}` in `PROVIDERS` in
@@ -151,6 +247,8 @@ into the version 1 APIs under `/api/mesh/`.
 
 - **Phosphorus** is built in. Sulfur proxies to its existing server, which owns
   authentication and remote services. No Phosphorus server deployment is changed.
+- **SSH** is built in, served by Sulfur's own server per saved host (above). It is a
+  provider with `linked: false`: hosts are added one by one, beside the linked mesh.
 - **Overlay networks** need a gateway/adapter that reads network-specific peer
   state, authenticates SSH or another transport, and implements file, session,
   terminal and tool services. Tailscale, Headscale, NetBird, ZeroTier and Nebula

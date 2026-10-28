@@ -1,5 +1,7 @@
 //! A linked mesh's API under /api/mesh/: its requests and sockets passed through
-//! as if its server were this page's own, its cookies kept by this origin.
+//! as if its server were this page's own, its cookies kept by this origin. The
+//! kinds of mesh Sulfur knows, among them SSH hosts, which this process serves
+//! itself under /api/ssh/ (ssh.rs) beside whichever mesh is linked.
 use std::{sync::Arc, time::Duration};
 
 use axum::{
@@ -24,16 +26,30 @@ pub struct Provider {
     pub kind: &'static str,
     pub version: u32,
     pub caps: &'static [&'static str],
+    /// linked as the mesh, by an HTTP gateway's address; false for a kind this
+    /// process serves itself beside the linked mesh
+    pub linked: bool,
 }
 
-pub const PROVIDERS: &[Provider] = &[Provider {
-    kind: "phosphorus",
-    version: 1,
-    caps: &[
-        "hosts", "files", "home", "sessions", "terminals", "toolchains", "runs", "languages", "git", "sqlite", "vsx",
-        "people", "agents", "models", "forgejo",
-    ],
-}];
+pub const PROVIDERS: &[Provider] = &[
+    Provider {
+        kind: "phosphorus",
+        version: 1,
+        caps: &[
+            "hosts", "files", "home", "sessions", "terminals", "toolchains", "runs", "languages", "git", "sqlite", "vsx",
+            "people", "agents", "models", "forgejo",
+        ],
+        linked: true,
+    },
+    // machines reached with ssh user@host, each on its own: no merged home, no
+    // people, agents, models or Forgejo, and no language servers or SQLite there yet
+    Provider {
+        kind: "ssh",
+        version: 1,
+        caps: &["hosts", "files", "sessions", "terminals", "toolchains", "runs", "git"],
+        linked: false,
+    },
+];
 
 pub fn provider(kind: &str) -> Res<&'static Provider> {
     let kind = if kind.is_empty() { "phosphorus" } else { kind };
@@ -334,6 +350,14 @@ mod tests {
         );
         assert!(mesh_info("").get("caps").unwrap().as_array().unwrap().contains(&json!("home")));
         assert!(provider("unknown").is_err());
+        let ssh = mesh_info("ssh");
+        for cap in ["files", "sessions", "terminals", "toolchains", "runs", "git"] {
+            assert!(ssh["caps"].as_array().unwrap().contains(&json!(cap)), "ssh hosts serve {cap}");
+        }
+        for cap in ["home", "people", "agents", "models", "forgejo", "languages", "sqlite", "vsx"] {
+            assert!(!ssh["caps"].as_array().unwrap().contains(&json!(cap)), "ssh hosts don't claim {cap}");
+        }
+        assert!(!provider("ssh").unwrap().linked && provider("").unwrap().linked);
         assert_eq!(socket_target("https://m.dev", "/api/state?x=1").unwrap(), "wss://m.dev/api/state?x=1");
     }
 }

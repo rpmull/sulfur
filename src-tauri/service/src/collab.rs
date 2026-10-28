@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::{future::BoxFuture, FutureExt};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
@@ -23,6 +24,46 @@ use crate::{
 };
 
 const HISTORY: usize = 2000;
+
+/// where a session's file lives: this computer's disk, or an SSH host's over SFTP
+pub trait Store: Send + Sync + 'static {
+    /// the file as the files API reads it: its text, or binary or tooBig
+    fn read<'a>(&'a self, share: &'a str, rel: &'a str) -> BoxFuture<'a, Res<Value>>;
+    /// a whole text, or one unique `old` replaced by `new`
+    fn save<'a>(&'a self, share: &'a str, rel: &'a str, text: Option<String>, old: Option<String>, new: Option<String>) -> BoxFuture<'a, Res<Value>>;
+    fn perms(&self, share: &str) -> Res<String>;
+    /// the file's signature as it is now (any change to it changes this), and
+    /// whether it was written so lately it may still be being written
+    fn stat<'a>(&'a self, share: &'a str, rel: &'a str) -> BoxFuture<'a, Res<(String, bool)>>;
+}
+
+impl Store for Files {
+    fn read<'a>(&'a self, share: &'a str, rel: &'a str) -> BoxFuture<'a, Res<Value>> {
+        Files::read(self, share, rel).boxed()
+    }
+    fn save<'a>(&'a self, share: &'a str, rel: &'a str, text: Option<String>, old: Option<String>, new: Option<String>) -> BoxFuture<'a, Res<Value>> {
+        Files::save(self, share, rel, text, old, new).boxed()
+    }
+    fn perms(&self, share: &str) -> Res<String> {
+        Ok(self.share(share)?.perms.clone())
+    }
+    fn stat<'a>(&'a self, share: &'a str, rel: &'a str) -> BoxFuture<'a, Res<(String, bool)>> {
+        async move {
+            let path = self.resolve(share, rel, false).await?;
+            let m = tokio::fs::metadata(&path).await?;
+            #[cfg(unix)]
+            let ino = std::os::unix::fs::MetadataExt::ino(&m);
+            #[cfg(not(unix))]
+            let ino = 0u64;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
+            Ok((format!("{ino}:{}:{}", mtime_ms(&m), m.len()), now - mtime_ms(&m) < 150.0))
+        }
+        .boxed()
+    }
+}
 
 struct Client {
     id: u64,
@@ -61,7 +102,7 @@ struct State {
 }
 
 pub struct Collab {
-    files: Arc<Files>,
+    files: Arc<dyn Store>,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     seq: AtomicU64,
 }
@@ -132,12 +173,17 @@ impl State {
 }
 
 impl Collab {
-    pub fn new(files: Arc<Files>) -> Arc<Collab> {
+    pub fn new(files: Arc<dyn Store>) -> Arc<Collab> {
+        Collab::watching(files, Duration::from_millis(300))
+    }
+
+    /// sessions whose files are looked at every `every` for changes made outside them
+    pub fn watching(files: Arc<dyn Store>, every: Duration) -> Arc<Collab> {
         let c = Arc::new(Collab { files, sessions: Mutex::new(HashMap::new()), seq: AtomicU64::new(0) });
         // the disk looked at for every file someone has open
         let weak = Arc::downgrade(&c);
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_millis(300));
+            let mut tick = tokio::time::interval(every);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
@@ -193,7 +239,7 @@ impl Collab {
                 }
             }
         };
-        let perms = self.files.share(share)?.perms.clone();
+        let perms = self.files.perms(share)?;
         let id = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
         let mut st = s.st.lock().await;
         st.idle += 1;
@@ -562,23 +608,10 @@ impl Collab {
     }
 
     async fn observe_disk(self: &Arc<Self>, s: &Arc<Session>, st: &mut State, force: bool) -> Res<bool> {
-        let path = self.files.resolve(&s.share, &s.rel, false).await?;
-        let signature = |m: &std::fs::Metadata| {
-            #[cfg(unix)]
-            let ino = std::os::unix::fs::MetadataExt::ino(m);
-            #[cfg(not(unix))]
-            let ino = 0u64;
-            format!("{ino}:{}:{}", mtime_ms(m), m.len())
-        };
-        let info = tokio::fs::metadata(&path).await?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64() * 1000.0)
-            .unwrap_or(0.0);
-        if now - mtime_ms(&info) < 150.0 {
+        let (sig, changing) = self.files.stat(&s.share, &s.rel).await?;
+        if changing {
             return Ok(false);
         }
-        let sig = signature(&info);
         if !force && sig == st.disk_signature {
             return Ok(true);
         }
@@ -589,8 +622,8 @@ impl Collab {
                 400,
             ));
         }
-        let after = tokio::fs::metadata(&path).await?;
-        if signature(&after) != sig {
+        let (after, _) = self.files.stat(&s.share, &s.rel).await?;
+        if after != sig {
             return Ok(false);
         }
         let raw = file["text"].as_str().unwrap_or("");

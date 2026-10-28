@@ -9,6 +9,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use futures_util::{future::BoxFuture, FutureExt};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -39,7 +40,7 @@ pub struct Spawn<'a> {
     pub env: Vec<(String, String)>,
 }
 
-fn size(cols: u16, rows: u16) -> PtySize {
+pub(crate) fn size(cols: u16, rows: u16) -> PtySize {
     PtySize {
         cols: if (20..=1000).contains(&cols) { cols } else { 120 },
         rows: if (5..=500).contains(&rows) { rows } else { 30 },
@@ -193,18 +194,70 @@ impl Pty {
     }
 }
 
+/// a running shell or task as a terminal drives it, wherever it runs
+pub trait Proc: Send + Sync {
+    fn input(&self, data: &[u8]);
+    fn resize(&self, cols: f64, rows: f64);
+    fn stop(&self);
+}
+
+impl Proc for Pty {
+    fn input(&self, data: &[u8]) {
+        Pty::input(self, data)
+    }
+    fn resize(&self, cols: f64, rows: f64) {
+        Pty::resize(self, cols, rows)
+    }
+    fn stop(&self) {
+        Pty::stop(self)
+    }
+}
+
+/// a shell started: the process, its exit code once it ends, and the folder it began in
+pub type Shell = (Arc<dyn Proc>, oneshot::Receiver<i32>, String);
+
+/// where a page's shells start: this computer's terminals, or an SSH host's
+pub trait Shells: Send + Sync {
+    /// the user's shell in `dir` (its home if that isn't a folder there), its output sent to `out`
+    fn shell(&self, dir: String, cols: u16, rows: u16, out: mpsc::UnboundedSender<Bytes>) -> BoxFuture<'_, Res<Shell>>;
+}
+
+/// this computer's own shells, in pseudo-terminals
+pub struct LocalShells;
+
+impl Shells for LocalShells {
+    fn shell(&self, wanted: String, cols: u16, rows: u16, out: mpsc::UnboundedSender<Bytes>) -> BoxFuture<'_, Res<Shell>> {
+        async move {
+            let dir = if !wanted.is_empty() && tokio::fs::metadata(&wanted).await.is_ok_and(|m| m.is_dir()) {
+                PathBuf::from(&wanted)
+            } else {
+                home_dir()
+            };
+            let (pty, exited) = Pty::spawn(Spawn { dir: Some(&dir), cols, rows, cmd: None, env: vec![] }, out)?;
+            Ok((pty as Arc<dyn Proc>, exited, dir.to_string_lossy().into_owned()))
+        }
+        .boxed()
+    }
+}
+
 struct TermSession {
     buffer: Vec<u8>,
     total: u64,
     ws: Option<Ws>,
     idle: u64,
-    pty: Arc<Pty>,
+    pty: Arc<dyn Proc>,
 }
 
 /// the page's shells by id, their recent output kept for a reloaded page
-#[derive(Default)]
 pub struct Terminals {
     sessions: StdMutex<HashMap<String, Arc<StdMutex<TermSession>>>>,
+    shells: Arc<dyn Shells>,
+}
+
+impl Default for Terminals {
+    fn default() -> Self {
+        Terminals::on(Arc::new(LocalShells))
+    }
 }
 
 /// one page's socket onto a terminal: its size and the session once one's started
@@ -223,6 +276,10 @@ impl TermSocket {
 }
 
 impl Terminals {
+    pub fn on(shells: Arc<dyn Shells>) -> Terminals {
+        Terminals { sessions: StdMutex::new(HashMap::new()), shells }
+    }
+
     pub fn attach(&self, ws: &Ws, t: &mut TermSocket, since: u64) -> bool {
         let Some(s) = self.sessions.lock().unwrap().get(&t.sid).cloned() else { return false };
         {
@@ -274,16 +331,8 @@ impl Terminals {
         }
         if pty.is_none() && (kind == "resize" || kind == "login") {
             let wanted = m["dir"].as_str().unwrap_or("").to_owned();
-            let dir = if !wanted.is_empty() && tokio::fs::metadata(&wanted).await.is_ok_and(|m| m.is_dir()) {
-                PathBuf::from(&wanted)
-            } else {
-                home_dir()
-            };
             let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
-            let (pty, exited) = Pty::spawn(
-                Spawn { dir: Some(&dir), cols: t.cols as u16, rows: t.rows as u16, cmd: None, env: vec![] },
-                tx,
-            )?;
+            let (pty, exited, dir) = self.shells.shell(wanted.clone(), t.cols as u16, t.rows as u16, tx).await?;
             let s = Arc::new(StdMutex::new(TermSession { buffer: Vec::new(), total: 0, ws: Some(ws.clone()), idle: 0, pty: pty.clone() }));
             self.sessions.lock().unwrap().insert(t.sid.clone(), s.clone());
             t.session = Some(s.clone());
@@ -318,7 +367,7 @@ impl Terminals {
                 }
             });
             if kind == "login" {
-                let then = m["then"].as_str().filter(|_| dir.to_string_lossy() == wanted);
+                let then = m["then"].as_str().filter(|_| dir == wanted);
                 if let Some(line) = then.or_else(|| m["run"].as_str()).filter(|l| !l.is_empty()) {
                     let line = format!("{line}\r");
                     tokio::spawn(async move {
@@ -363,18 +412,23 @@ impl Terminals {
 #[derive(Deserialize)]
 pub struct Task {
     #[serde(default)]
-    command: String,
+    pub(crate) command: String,
     #[serde(default)]
-    dir: String,
+    pub(crate) dir: String,
     #[serde(default)]
-    vcvars: String,
+    pub(crate) vcvars: String,
     #[serde(default)]
-    cols: f64,
+    pub(crate) cols: f64,
     #[serde(default)]
-    rows: f64,
+    pub(crate) rows: f64,
     #[serde(default)]
-    env: HashMap<String, String>,
+    pub(crate) env: HashMap<String, String>,
 }
+
+/// the folders a Unix task's PATH has before the user's own: where toolchains
+/// install themselves that a non-login shell may not have on it
+pub(crate) const UNIX_PATH: &str =
+    "$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:$HOME/.dotnet:$HOME/.bun/bin:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";
 
 /// a build or run in a terminal of its own; the socket ends with its exit code
 pub fn task_start(ws: &Ws, task: Option<Task>) -> Res<Arc<Pty>> {
@@ -391,10 +445,7 @@ pub fn task_start(ws: &Ws, task: Option<Task>) -> Res<Arc<Pty>> {
         let pre = if task.vcvars.is_empty() { String::new() } else { format!("call \"{}\" >nul && ", task.vcvars) };
         format!("{pre}{}", task.command)
     } else {
-        format!(
-            "PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$HOME/go/bin:$HOME/.dotnet:$HOME/.bun/bin:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; export PATH; {}",
-            task.command
-        )
+        format!("PATH=\"{UNIX_PATH}\"; export PATH; {}", task.command)
     };
     let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
     let dir = PathBuf::from(&task.dir);
@@ -437,21 +488,25 @@ pub struct GitCreds {
 #[derive(Deserialize)]
 pub struct GitRequest {
     #[serde(default)]
-    dir: String,
+    pub(crate) dir: String,
     #[serde(default)]
-    args: Vec<Value>,
+    pub(crate) args: Vec<Value>,
     #[serde(default)]
-    creds: Option<GitCreds>,
+    pub(crate) creds: Option<GitCreds>,
+    /// run for the page on its own (an autofetch): nothing asked, a login that needs a password fails
+    #[serde(default)]
+    pub(crate) quiet: bool,
 }
 
 const GIT_VERBS: &str = "status diff add restore rm mv commit push pull fetch branch switch checkout log show stash rev-parse remote init clone merge rebase reset ls-files tag blame for-each-ref symbolic-ref check-ignore lfs";
 // what of git-lfs Sulfur runs: whether it is there, what it tracks, and bringing those files down
 const LFS_VERBS: &str = "version ls-files status pull fetch install env";
 
-/// a git command of the verbs Sulfur runs, without options that run other programs
-pub async fn git(p: GitRequest) -> Res<Output> {
-    let mut args = Vec::with_capacity(p.args.len());
-    for a in &p.args {
+/// a git command's arguments, held to the verbs Sulfur runs and without options
+/// that run other programs; and whether it reaches a remote (slow, and may ask)
+pub fn git_args(given: &[Value]) -> Res<(Vec<String>, bool)> {
+    let mut args = Vec::with_capacity(given.len());
+    for a in given {
         match a.as_str() {
             Some(s) if !s.contains('\0') => args.push(s.to_owned()),
             _ => return fail("not a git command Sulfur runs"),
@@ -469,10 +524,65 @@ pub async fn git(p: GitRequest) -> Res<Output> {
             return fail(format!("an option Sulfur doesn't pass to git: {a}"));
         }
     }
+    let slow = ["clone", "push", "pull", "fetch"].contains(&verb.as_str())
+        || (verb == "lfs" && ["pull", "fetch"].contains(&args.get(1).map(String::as_str).unwrap_or_default()));
+    Ok((args, slow))
+}
+
+/// ssh as git runs it for a remote: a bounded wait for the server, and with nobody
+/// to answer a prompt, no prompt at all (BatchMode), so a password login fails at
+/// once instead of at the run's timeout. The user's own ssh command, from the
+/// environment or core.sshCommand, is left as it is
+pub fn ssh_command(asking: bool) -> String {
+    let mut c = "ssh -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4".to_owned();
+    if !asking {
+        c.push_str(" -o BatchMode=yes");
+    }
+    c
+}
+
+async fn ssh_env(dir: &str, asking: bool) -> Option<(String, String)> {
+    if std::env::var_os("GIT_SSH_COMMAND").is_some() || std::env::var_os("GIT_SSH").is_some() {
+        return None;
+    }
+    let mut argv = vec!["git".to_owned()];
+    if !dir.is_empty() {
+        argv.extend(["-C".into(), dir.to_owned()]);
+    }
+    argv.extend(["config".into(), "--get".into(), "core.sshCommand".into()]);
+    let set = command(&argv, None, &[], Duration::from_secs(10)).await.is_ok_and(|r| r.code == 0 && !r.out.trim().is_empty());
+    (!set).then(|| ("GIT_SSH_COMMAND".into(), ssh_command(asking)))
+}
+
+/// a git command of the verbs Sulfur runs, nothing it can't answer asked
+pub async fn git(p: GitRequest) -> Res<Output> {
+    git_with(p, None).await
+}
+
+/// a git command whose prompts (an SSH password, a passphrase, a new host's key)
+/// are put to the page through askpass
+pub async fn git_asking(p: GitRequest, asks: &Arc<crate::askpass::Asks>) -> Res<Output> {
+    git_with(p, Some(asks)).await
+}
+
+async fn git_with(p: GitRequest, asks: Option<&Arc<crate::askpass::Asks>>) -> Res<Output> {
+    let (args, slow) = git_args(&p.args)?;
+    let verb = args[0].clone();
     if !p.dir.is_empty() && !is_absolute_str(&p.dir) {
         return fail("a full path to the folder");
     }
     let mut env = vec![("GIT_TERMINAL_PROMPT".into(), "0".into()), ("LC_ALL".into(), "C".into())];
+    // the run's askpass token, valid while it runs
+    let mut asking = None;
+    if slow || verb == "remote" {
+        if let Some(a) = asks.filter(|_| !p.quiet) {
+            asking = a.run().await;
+        }
+        if let Some(r) = &asking {
+            env.extend(r.env.iter().cloned());
+        }
+        env.extend(ssh_env(&p.dir, asking.is_some()).await);
+    }
     if let Some(c) = p.creds.filter(|c| !c.host.is_empty() && !c.user.is_empty() && !c.host.contains(['\'', '"', '\\', ' ', '\r', '\n'])) {
         env.extend([
             ("PHOS_GIT_USER".into(), c.user),
@@ -489,13 +599,13 @@ pub async fn git(p: GitRequest) -> Res<Output> {
     if !p.dir.is_empty() {
         argv.extend(["-C".into(), p.dir.clone()]);
     }
-    let slow = ["clone", "push", "pull", "fetch"].contains(&verb.as_str())
-        || (verb == "lfs" && ["pull", "fetch"].contains(&args.get(1).map(String::as_str).unwrap_or_default()));
     argv.extend(args);
-    command(&argv, None, &env, Duration::from_secs(if slow { 900 } else { 120 })).await
+    let out = command(&argv, None, &env, Duration::from_secs(if slow { 900 } else { 120 })).await;
+    drop(asking);
+    out
 }
 
-const KNOWN: &[(&str, &str, &str, &str)] = &[
+pub(crate) const KNOWN: &[(&str, &str, &str, &str)] = &[
     ("gcc", "GCC", "compiler", "--version"),
     ("g++", "G++", "compiler", "--version"),
     ("clang", "Clang", "compiler", "--version"),
@@ -635,7 +745,7 @@ mod tests {
     async fn git_keeps_exit_and_output_and_refuses_execution_options() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_string_lossy().into_owned();
-        let run = |args: &[&str]| GitRequest { dir: root.clone(), args: args.iter().map(|a| json!(a)).collect(), creds: None };
+        let run = |args: &[&str]| GitRequest { dir: root.clone(), args: args.iter().map(|a| json!(a)).collect(), creds: None, quiet: false };
         assert_eq!(git(run(&["init"])).await.unwrap().code, 0);
         std::fs::write(
             dir.path().join(".git/config"),
@@ -656,5 +766,28 @@ mod tests {
         assert!(git(run(&["lfs"])).await.unwrap_err().message.contains("lfs"));
         assert!(git(run(&["lfs", "migrate", "import"])).await.unwrap_err().message.contains("lfs"));
         assert!(git(run(&["lfs", "ls-files", "-c", "x"])).await.unwrap_err().message.contains("option"));
+    }
+
+    #[test]
+    fn remote_verbs_get_a_bounded_ssh_that_never_waits_on_a_prompt_nobody_sees() {
+        let args = |a: &[&str]| a.iter().map(|x| json!(x)).collect::<Vec<_>>();
+        assert!(git_args(&args(&["clone", "user@172.18.220.63:/usr/arconic/ccm"])).unwrap().1);
+        assert!(git_args(&args(&["push", "origin", "master"])).unwrap().1);
+        assert!(git_args(&args(&["lfs", "pull"])).unwrap().1);
+        assert!(!git_args(&args(&["status"])).unwrap().1);
+        // the refusals hold for an ssh address as for any
+        assert!(git_args(&args(&["clone", "--upload-pack=touch /tmp/x", "user@host:/repo"])).is_err());
+        assert!(git_args(&args(&["fetch", "-c", "core.sshCommand=evil"])).is_err());
+        assert!(git_args(&args(&["clone", "-u", "evil", "user@host:/repo"])).is_err());
+        let alone = ssh_command(false);
+        assert!(alone.starts_with("ssh ") && alone.contains("BatchMode=yes") && alone.contains("ConnectTimeout="));
+        let asked = ssh_command(true);
+        assert!(!asked.contains("BatchMode") && asked.contains("ConnectTimeout="));
+    }
+
+    #[tokio::test]
+    async fn with_no_page_listening_git_gets_no_askpass() {
+        let asks = Arc::new(crate::askpass::Asks::default());
+        assert!(asks.run().await.is_none());
     }
 }

@@ -18,6 +18,11 @@ http-body-util = "0.1"
 minisign-verify = "0.3"
 portable-pty = "0.9"
 regex = "1"
+# SSH hosts: pure Rust (no OpenSSL or libssh2 to build per platform), tokio-native,
+# password, keyboard-interactive, key and agent logins, PTYs; ring as rustls has it
+ring = "0.17"
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "system-proxy"] }
 rusqlite = { version = "0.41", features = ["bundled", "hooks", "limits"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

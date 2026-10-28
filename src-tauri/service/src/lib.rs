@@ -1,6 +1,7 @@
 //! Sulfur's own server on this computer, run inside its desktop app (or alone,
 //! headless). It serves this computer's files, terminals, builds and compilers
 //! at all times; a remembered mesh is reachable beside them under /api/mesh/.
+//! Saved SSH hosts are served beside them under /api/ssh/<name>/.
 //! Only on loopback, and only to its own page: every request's Host and Origin
 //! are held to it, so no other site in a browser reaches it.
 use std::{
@@ -20,6 +21,7 @@ use axum::{
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
+pub mod askpass;
 pub mod bundle;
 pub mod collab;
 pub mod extensions;
@@ -31,6 +33,7 @@ pub mod ot;
 pub mod processes;
 pub mod registry;
 pub mod sqlite;
+pub mod ssh;
 pub mod updates;
 pub mod util;
 pub mod vsix;
@@ -104,6 +107,8 @@ struct App {
     dist: Option<PathBuf>,
     native: bool,
     http: reqwest::Client,
+    ssh: ssh::SshHosts,
+    asks: Arc<askpass::Asks>,
 }
 
 pub struct Service {
@@ -198,6 +203,7 @@ pub async fn start(opts: Options) -> Result<Service, StartError> {
         let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist");
         (cfg!(debug_assertions) && dev.join("sulfur/index.html").exists()).then_some(dev)
     });
+    let ssh_hosts = ssh::SshHosts::new(&cfg);
     let app = Arc::new(App {
         origin: format!("http://{authority}"),
         host: authority,
@@ -214,6 +220,8 @@ pub async fn start(opts: Options) -> Result<Service, StartError> {
         dist,
         native: opts.native,
         http: mesh::client(),
+        ssh: ssh_hosts,
+        asks: Arc::new(askpass::Asks::default()),
     });
     let router = Router::new().fallback(handle).with_state(app.clone());
     let (stop, stopped) = oneshot::channel::<()>();
@@ -231,6 +239,7 @@ impl Service {
     /// every open file saved, every shell and upload ended, then the server
     pub async fn stop(mut self) {
         self.app.collab.flush().await;
+        self.app.ssh.dispose().await;
         self.app.terms.dispose();
         self.app.files.dispose().await;
         if let Some(s) = self.stop.take() {
@@ -284,6 +293,10 @@ async fn route(app: &Arc<App>, req: Request) -> Res<Response<Body>> {
     if path.starts_with("/api/mesh/") {
         return mesh_route(app, req, upgrade).await;
     }
+    if let Some(rest) = path.strip_prefix("/api/ssh/") {
+        let rest = rest.to_owned();
+        return ssh_route(app, req, &rest, upgrade).await;
+    }
     if path.starts_with("/api/sidecar/") {
         return sidecar(app, req, &path).await;
     }
@@ -299,7 +312,7 @@ async fn route(app: &Arc<App>, req: Request) -> Res<Response<Body>> {
         ("/api/sulfur/toolchains", _) => return Ok(json(&app.toolchains.probe(&app.machine.host, q.contains_key("fresh")).await)),
         ("/api/sulfur/git", &Method::POST) => {
             let p: processes::GitRequest = serde_json::from_value(body_json(req.into_body(), 1 << 20).await?)?;
-            return Ok(json(&processes::git(p).await?));
+            return Ok(json(&processes::git_asking(p, &app.asks).await?));
         }
         ("/api/sulfur/sqlite", &Method::POST) => {
             let p: sqlite::Request = serde_json::from_value(body_json(req.into_body(), (1 << 20) + 4096).await?)?;
@@ -451,6 +464,9 @@ async fn sidecar(app: &Arc<App>, req: Request, path: &str) -> Res<Response<Body>
                 "info": app.machine.info(),
                 "nodeExtensions": extensions::runtime().is_some(),
                 "md": "page",
+                "ssh": app.ssh.info().await,
+                // git's prompts can be answered on the page (askpass.rs)
+                "asks": askpass::helper().is_some(),
             });
             if !server.is_empty() {
                 info["mesh"] = mesh::mesh_info(cfg["kind"].as_str().unwrap_or(""));
@@ -467,6 +483,9 @@ async fn sidecar(app: &Arc<App>, req: Request, path: &str) -> Res<Response<Body>
                 return fail("unknown mesh kind");
             }
             let provider = mesh::provider(b["kind"].as_str().unwrap_or("phosphorus"))?;
+            if !provider.linked {
+                return fail(format!("{} isn't linked as a mesh: its hosts are added on their own", provider.kind));
+            }
             let remote = mesh::server_url(b["server"].as_str().unwrap_or(""))?;
             mesh::reach(&remote).await?;
             let next = {
@@ -499,6 +518,38 @@ async fn sidecar(app: &Arc<App>, req: Request, path: &str) -> Res<Response<Body>
             *cfg = next;
             Ok(json(&json!({ "servers": cfg["servers"] })))
         }
+        ("/api/sidecar/ssh", Method::GET) => Ok(json(&app.ssh.info().await)),
+        ("/api/sidecar/ssh/add", Method::POST) => {
+            let b = body_json(req.into_body(), 64 << 10).await?;
+            let s = |k: &str| b[k].as_str().unwrap_or("").to_owned();
+            let (host, path) = app.ssh.add(&s("address"), &s("key"), &s("name"), &app.machine.user, &[app.machine.host.clone()])?;
+            save_ssh(app)?;
+            Ok(json(&json!({ "host": host, "path": path })))
+        }
+        ("/api/sidecar/ssh/connect", Method::POST) => {
+            let b = body_json(req.into_body(), 64 << 10).await?;
+            let answers: ssh::Answers = serde_json::from_value(b.clone()).unwrap_or_default();
+            match app.ssh.connect(b["name"].as_str().unwrap_or(""), answers, b["remember"] == true).await {
+                Ok(host) => Ok(json(&json!({ "ok": true, "host": host }))),
+                Err(r) => {
+                    let (status, body) = r.answer();
+                    Ok(util::json_status(&body, status))
+                }
+            }
+        }
+        ("/api/sidecar/ssh/disconnect", Method::POST) => {
+            let b = body_json(req.into_body(), 64 << 10).await?;
+            app.ssh.disconnect(b["name"].as_str().unwrap_or("")).await;
+            Ok(json(&app.ssh.info().await))
+        }
+        ("/api/sidecar/ssh/forget", Method::POST) => {
+            let b = body_json(req.into_body(), 64 << 10).await?;
+            if !app.ssh.forget(b["name"].as_str().unwrap_or("")).await {
+                return fail_at("no such SSH host", 404);
+            }
+            save_ssh(app)?;
+            Ok(json(&app.ssh.info().await))
+        }
         ("/api/sidecar/update", Method::GET) => Ok(json(&app.updates.info().await)),
         ("/api/sidecar/update", Method::POST) => {
             if app.native {
@@ -522,6 +573,16 @@ async fn sidecar(app: &Arc<App>, req: Request, path: &str) -> Res<Response<Body>
         }
         _ => fail_at("no such call", 404),
     }
+}
+
+/// the saved SSH hosts written to the app's settings, never anything typed for them
+fn save_ssh(app: &Arc<App>) -> Res<()> {
+    let mut cfg = app.cfg.lock().unwrap();
+    let mut next = cfg.clone();
+    next["ssh"] = json!(app.ssh.specs());
+    util::atomic_json(&app.config_file, &next)?;
+    *cfg = next;
+    Ok(())
 }
 
 /// a file shown in the system's own file manager
@@ -636,6 +697,11 @@ async fn download(files: &Arc<Files>, share: &str, rel: &str, inline: bool) -> R
     if !meta.is_file() {
         return fail("not a file");
     }
+    let name = location.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Ok(attachment(file, meta.len(), &name, inline))
+}
+
+fn attachment<R: tokio::io::AsyncRead + Unpin + Send + 'static>(file: R, len: u64, name: &str, inline: bool) -> Response<Body> {
     let stream = futures_util::stream::unfold(file, |mut f| async move {
         use tokio::io::AsyncReadExt;
         let mut buf = vec![0u8; 256 * 1024];
@@ -648,10 +714,10 @@ async fn download(files: &Arc<Files>, share: &str, rel: &str, inline: bool) -> R
         }
     });
     let mut r = Response::new(Body::from_stream(stream));
-    let name = location.file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_default();
+    let name = name.replace('"', "");
     let h = r.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(guess_type_static(&name)));
-    h.insert(header::CONTENT_LENGTH, HeaderValue::from(meta.len()));
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
     if !inline {
         let ascii: String = name.chars().map(|c| if c.is_ascii() && !c.is_control() { c } else { '_' }).collect();
         let encoded: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>().replace('+', "%20");
@@ -659,7 +725,7 @@ async fn download(files: &Arc<Files>, share: &str, rel: &str, inline: bool) -> R
             h.insert(header::CONTENT_DISPOSITION, v);
         }
     }
-    Ok(r)
+    r
 }
 
 fn guess_type_static(name: &str) -> &'static str {
@@ -704,6 +770,8 @@ async fn socket(app: &Arc<App>, req: Request, local: &str) -> Res<Response<Body>
             "/api/sulfur/languages" => "languages",
             "/api/sulfur/run" => "task",
             "/api/sulfur/extensions/host" => "extension",
+            // git's prompts, for the page to answer (askpass.rs)
+            "/api/sulfur/asks" => "asks",
             "/api/state" => "state",
             _ => return fail_at("no such socket", 404),
         }
@@ -725,34 +793,16 @@ async fn socket(app: &Arc<App>, req: Request, local: &str) -> Res<Response<Body>
             ws.close(1000);
         };
         match route {
-            "collab" => {
-                let share = q.get("share").cloned().unwrap_or_else(|| "0".into());
-                let path = q.get("path").cloned().unwrap_or_default();
-                let (s, me) = match app.collab.attach(&ws, &share, &path).await {
-                    Ok(v) => v,
-                    Err(e) => return failed(&ws, &e),
-                };
+            "collab" => serve_collab(&app.collab, &ws, &mut rx, &q).await,
+            "terminal" => serve_term(&app.terms, &ws, &mut rx, &q, auto).await,
+            "asks" => {
+                app.asks.attach(&ws);
                 while let Some(f) = next_frame(&mut rx).await {
-                    let text = match f {
-                        Frame::Text(t) => t,
-                        Frame::Binary(b) => String::from_utf8_lossy(&b).into_owned(),
-                    };
-                    if let Err(e) = app.collab.message(&s, me, &ws, &text).await {
-                        failed(&ws, &e);
+                    if let Frame::Text(t) = f {
+                        app.asks.message(&t);
                     }
                 }
-                app.collab.close(&s, me).await;
-            }
-            "terminal" => {
-                let since = q.get("since").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-                let mut t = processes::TermSocket::new(q.get("sid").cloned().unwrap_or_default(), auto);
-                app.terms.attach(&ws, &mut t, since);
-                while let Some(f) = next_frame(&mut rx).await {
-                    if let Err(e) = app.terms.message(&ws, &mut t, f).await {
-                        failed(&ws, &e);
-                    }
-                }
-                app.terms.close(&ws, &t);
+                app.asks.detach(&ws);
             }
             "task" => {
                 let mut task: Option<Arc<processes::Pty>> = None;
@@ -854,6 +904,160 @@ async fn socket(app: &Arc<App>, req: Request, local: &str) -> Res<Response<Body>
             }
         }
     }))
+}
+
+/// a socket's refusal told the page, then the socket ended
+fn socket_failed(ws: &Ws, e: &Fail) {
+    ws.json(&json!({ "type": "error", "error": e.message }));
+    ws.close(1000);
+}
+
+type FrameStream = futures_util::stream::SplitStream<axum::extract::ws::WebSocket>;
+
+/// a page editing one file, in its live session (this computer's or an SSH host's)
+async fn serve_collab(collab: &Arc<collab::Collab>, ws: &Ws, rx: &mut FrameStream, q: &HashMap<String, String>) {
+    let share = q.get("share").cloned().unwrap_or_else(|| "0".into());
+    let path = q.get("path").cloned().unwrap_or_default();
+    let (s, me) = match collab.attach(ws, &share, &path).await {
+        Ok(v) => v,
+        Err(e) => return socket_failed(ws, &e),
+    };
+    while let Some(f) = next_frame(rx).await {
+        let text = match f {
+            Frame::Text(t) => t,
+            Frame::Binary(b) => String::from_utf8_lossy(&b).into_owned(),
+        };
+        if let Err(e) = collab.message(&s, me, ws, &text).await {
+            socket_failed(ws, &e);
+        }
+    }
+    collab.close(&s, me).await;
+}
+
+/// a page's terminal, its shell kept for its return
+async fn serve_term(terms: &Arc<processes::Terminals>, ws: &Ws, rx: &mut FrameStream, q: &HashMap<String, String>, auto: bool) {
+    let since = q.get("since").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let mut t = processes::TermSocket::new(q.get("sid").cloned().unwrap_or_default(), auto);
+    terms.attach(ws, &mut t, since);
+    while let Some(f) = next_frame(rx).await {
+        if let Err(e) = terms.message(ws, &mut t, f).await {
+            socket_failed(ws, &e);
+        }
+    }
+    terms.close(ws, &t);
+}
+
+/// a saved SSH host's API, as a mesh host's: /api/ssh/<name>/api/files/<name>/…,
+/// /api/code/<name> and /api/term/<name> sockets, /api/sulfur/git, run and toolchains
+async fn ssh_route(app: &Arc<App>, req: Request, rest: &str, upgrade: bool) -> Res<Response<Body>> {
+    let (name, api) = rest.split_once('/').unwrap_or((rest, ""));
+    let (name, api) = (name.to_owned(), format!("/{api}"));
+    if !valid_host(&name) || app.ssh.find(&name).is_none() {
+        return fail_at(format!("no SSH host named {name}"), 404);
+    }
+    let remote = app.ssh.get(&name).await?;
+    let q = query(&req);
+    if upgrade {
+        let route = if api == format!("/api/code/{name}") {
+            "collab"
+        } else if api == format!("/api/term/{name}") {
+            let sid = q.get("sid").cloned().unwrap_or_default();
+            if sid.is_empty() || sid.len() > 64 {
+                return fail("invalid session");
+            }
+            "terminal"
+        } else if api == "/api/sulfur/run" {
+            "task"
+        } else {
+            return fail_at(format!("an SSH host has no {api} socket"), 404);
+        };
+        let auto = query_has(&req, "auto");
+        let (mut parts, _) = req.into_parts();
+        let up = WebSocketUpgrade::from_request_parts(&mut parts, &()).await.map_err(|_| Fail::new("upgrade failed", 400))?;
+        return Ok(up.max_message_size(32 << 20).on_upgrade(move |socket| async move {
+            let (ws, mut rx) = Ws::start(socket);
+            match route {
+                "collab" => serve_collab(&remote.collab, &ws, &mut rx, &q).await,
+                "terminal" => serve_term(&remote.terms, &ws, &mut rx, &q, auto).await,
+                _ => {
+                    let mut task: Option<Arc<dyn processes::Proc>> = None;
+                    while let Some(f) = next_frame(&mut rx).await {
+                        match f {
+                            Frame::Binary(b) => {
+                                if let Some(t) = &task {
+                                    t.input(&b);
+                                }
+                            }
+                            Frame::Text(text) => {
+                                let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+                                match &task {
+                                    None => match remote.task(&ws, serde_json::from_value(v["task"].clone()).ok()).await {
+                                        Ok(t) => task = Some(t),
+                                        Err(e) => socket_failed(&ws, &e),
+                                    },
+                                    Some(t) => match v["type"].as_str() {
+                                        Some("resize") => t.resize(v["cols"].as_f64().unwrap_or(0.0), v["rows"].as_f64().unwrap_or(0.0)),
+                                        Some("kill") => t.stop(),
+                                        _ => {}
+                                    },
+                                }
+                            }
+                        }
+                    }
+                    if let Some(t) = task {
+                        t.stop();
+                    }
+                }
+            }
+        }));
+    }
+    let method = req.method().clone();
+    match (api.as_str(), &method) {
+        ("/api/sulfur/git", &Method::POST) => {
+            let p: processes::GitRequest = serde_json::from_value(body_json(req.into_body(), 1 << 20).await?)?;
+            return Ok(json(&remote.git(p).await?));
+        }
+        ("/api/sulfur/toolchains", _) => return Ok(json(&remote.toolchains(q.contains_key("fresh")).await)),
+        _ => {}
+    }
+    let Some(op) = api.strip_prefix(&format!("/api/files/{name}/")).map(str::to_owned) else {
+        return fail_at(format!("an SSH host has no {api}"), 404);
+    };
+    let files = &remote.files;
+    let share = q.get("share").cloned().unwrap_or_else(|| "0".into());
+    let rel = q.get("path").cloned().unwrap_or_default();
+    let g = |k: &str| q.get(k).cloned().unwrap_or_default();
+    let (quiet, inline) = (query_has(&req, "quiet"), query_has(&req, "inline"));
+    if method == Method::GET {
+        let result = match op.as_str() {
+            "info" => Ok(json(&remote.info["files"])),
+            "list" => files.list(&share, &rel).await.map(|v| json(&v)),
+            "tree" => files.tree(&share, &rel, q.get("depth").map(String::as_str).unwrap_or("1"), &g("match"), &g("skip")).await.map(|v| json(&v)),
+            "search" => files.search(&share, &rel, &g("query"), g("content") == "true", &g("glob"), &g("skip")).await.map(|v| json(&v)),
+            "read" => files.read(&share, &rel).await.map(|v| json(&v)),
+            "download" => files.open(&share, &rel).await.map(|(f, len, file)| attachment(Box::pin(f), len, &file, inline)),
+            _ => fail_at("method not allowed", 405),
+        };
+        return match result {
+            Err(e) if quiet && e.missing => Ok(json(&json!({ "missing": true, "error": util::GONE }))),
+            r => r,
+        };
+    }
+    if method == Method::POST {
+        if op == "upload" {
+            let (id, offset, total) = (q.get("id").cloned(), q.get("offset").cloned(), q.get("total").cloned());
+            return Ok(json(&files.upload(&share, &rel, req.into_body(), id.as_deref(), offset.as_deref(), total.as_deref()).await?));
+        }
+        let b = body_json(req.into_body(), 64 << 20).await?;
+        if op == "save" {
+            let path = b["path"].as_str().unwrap_or("").to_owned();
+            return Ok(json(&remote.collab.write(&share, &path, &b).await?));
+        }
+        if ["mkdir", "rename", "delete"].contains(&op.as_str()) {
+            return Ok(json(&files.mutate(&share, &op, &b).await?));
+        }
+    }
+    fail_at("method not allowed", 405)
 }
 
 #[cfg(test)]

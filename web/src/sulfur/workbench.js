@@ -70,6 +70,7 @@ import { mountNoteGraph } from './notes-graph.js';
 import { symbolsFor, identifierAt, enclosingSymbol } from '../symbols.js';
 import { singleFileCommand, configsFor } from './build-commands.js';
 import { supportsMesh } from './mesh.js';
+import { askBox, sshFolder, sshLabel, sshNeedBox } from './ssh.js';
 import { cmakeTargets, cmakeConfiguration, targetForFile, executableCommand, absolutePath, joinPath } from './project-targets.js';
 import { LOOK_IDS, PALETTES, PALETTE_EVENT, lookNow, paletteNow, setPalette } from '#host';
 import guideText from '../../../docs/sulfur-extensions.md';
@@ -529,6 +530,7 @@ const SETTINGS = {
   'workbench.colorTheme': { def: '', type: 'string', title: 'Workbench: Color Theme', about: 'A color theme from a converted VS Code extension (its extension id / theme id), worn over the palette. Empty for the palette’s own. Preferences: Color Theme picks one.' },
   'workbench.iconTheme': { def: '', type: 'string', title: 'Workbench: File Icon Theme', about: 'A file icon theme from a converted VS Code extension (its extension id / theme id). Empty for Sulfur’s own icons. Preferences: File Icon Theme picks one.' },
   'workbench.restoreEditors': { def: true, type: 'boolean', title: 'Workbench: Restore Editors', about: 'Restore each folder’s open files and cursor positions when switching folders or reopening Sulfur.' },
+  'sulfur.ssh.rememberPasswords': { def: false, type: 'boolean', title: 'Remote: Remember SSH Passwords', about: 'Keep the SSH passwords and key passphrases you type (for an SSH host, or when Git asks) until Sulfur quits, so they aren’t asked again. They stay in memory only and are never written to disk. Off, a host’s password is kept only while it’s connected, to reconnect after a drop.' },
   'sulfur.runners': { def: {}, type: 'object', title: 'Run: Runners', about: 'Commands that run a file, by extension, over the built-in ones, as {"py": "python3 -u \\"$f\\""}: $f is the file, $o a fresh output path beside it.' },
   'chat.includeActiveFile': { def: true, type: 'boolean', title: 'Chat: Include Active File', about: 'Controls whether the mesh agents see the file you have open, and know "this file" means it.' },
 };
@@ -635,6 +637,7 @@ export function ideStart(w, open) {
     I.offs.push(() => systemLight.removeEventListener('change', follow));
   }
   if (standalone?.app) setTimeout(() => I && checkUpdate(false), 5000);
+  if (localDesktop() && standalone.asks && standalone.listenAsks) I.offs.push(standalone.listenAsks(gitAsk, gitAskDone));
   // the color theme phosphorus wide, picked here, in the desktop's account menu or another tab
   const repaint = () => I && applySettings();
   addEventListener(PALETTE_EVENT, repaint);
@@ -3811,6 +3814,11 @@ function registerCommands() {
   C('sulfur.mesh.other', 'Connect to Another Phosphorus Mesh…', () => meshConnect(true), { when: () => !!standalone?.app, category: 'Mesh' });
   C('sulfur.mesh.open', 'Open the Mesh’s Machines', () => meshOpen(), { when: () => !!standalone?.app && localDesktop() && !!standalone.meshUser, category: 'Mesh' });
   C('sulfur.mesh.signOut', 'Sign Out of the Mesh', () => meshSignOut(), { when: () => !!standalone?.app && !!standalone.meshUser, category: 'Mesh' });
+  // machines reached with ssh user@host, no mesh: the app's own server connects them
+  C('sulfur.ssh.add', 'Add SSH Host…', () => sshAddHost(), { when: () => sshReady(), category: 'Remote' });
+  C('sulfur.ssh.connect', 'Connect to SSH Host…', () => sshConnectHost(), { when: () => sshReady(), category: 'Remote' });
+  C('sulfur.ssh.disconnect', 'Disconnect SSH Host…', () => sshDropHost(false), { when: () => sshReady() && sshHostsNow().some((h) => h.connected), category: 'Remote' });
+  C('sulfur.ssh.forget', 'Forget SSH Host…', () => sshDropHost(true), { when: () => sshReady() && sshHostsNow().length > 0, category: 'Remote' });
   C('workbench.action.selectTheme', 'Color Theme', () => pickTheme(), { key: 'ctrl+k ctrl+t', category: 'Preferences' });
   C('workbench.action.selectIconTheme', 'File Icon Theme', () => pickIconTheme(), { category: 'Preferences' });
   C('workbench.action.toggleLightDarkThemes', 'Toggle between Light and Dark', () => setSetting('window.appearance', document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'), { when: () => !!standalone, category: 'Preferences' });
@@ -4204,7 +4212,9 @@ function dialogPlaces() {
   const mesh = localDesktop() ? (meshLinked() ? meshName() : '') : meshName() || 'Mesh';
   if (mesh) {
     const items = localDesktop() ? [] : [{ loc: HOME_LOC, dir: acct.user, label: 'Home', ic: 'home', detail: 'synced across the mesh' }];
-    const hosts = [...new Set([...(localDesktop() ? otherHosts() : homeOnline()), ...live])].filter((h) => h && h !== local).sort();
+    // SSH hosts have their own group below
+    const ssh = new Set(sshHostsNow().map((h) => h.name));
+    const hosts = [...new Set([...(localDesktop() ? otherHosts() : homeOnline()), ...live])].filter((h) => h && h !== local && !ssh.has(h)).sort();
     for (const h of hosts) {
       if (!live.has(h)) { items.push({ host: h, label: h, ic: 'host', off: true, detail: `log in ${loginWhere()}` }); continue; }
       items.push({ host: h, label: h, ic: 'host', head: true });
@@ -4216,6 +4226,17 @@ function dialogPlaces() {
     if (acct.admin && !localDesktop()) items.push({ label: 'Add a Folder of a Machine…', ic: 'plus', act: () => addFolderDialog(), detail: 'publish one, like D:\\Projects or ~/src' });
   } else if (standalone && !meshChecking()) {
     groups.push({ head: 'Phosphorus Mesh', items: [{ label: 'Log into your mesh…', ic: 'remote', run: () => run('sulfur.mesh.connect'), detail: 'its machines here too' }] });
+  }
+  if (sshReady()) {
+    const items = [];
+    for (const h of sshHostsNow()) {
+      if (!h.connected || !live.has(h.name)) { items.push({ label: h.name, ic: 'host', run: () => sshConnectHost(h.name), detail: `${sshLabel(h)} · connect…` }); continue; }
+      items.push({ host: h.name, label: h.name, ic: 'host', head: true, detail: sshLabel(h) });
+      items.push(...ownHome(h.name, baseName(h.info?.home || h.user)).map((x) => ({ ...x, sub: true })));
+      items.push(...drives(h.name).map((x) => ({ ...x, sub: true })));
+    }
+    items.push({ label: 'Add SSH Host…', ic: 'plus', run: () => run('sulfur.ssh.add'), detail: 'user@host, as you’d give ssh' });
+    groups.push({ head: 'SSH Hosts', items });
   }
   return groups;
 }
@@ -7344,6 +7365,8 @@ async function git(args, o = {}) {
   if (!w) throw new Error(`no machine to run git on: log into one ${loginWhere()}`);
   const body = { host: w.host, dir: o.dir || w.dir, args };
   if (['clone', 'push', 'pull', 'fetch'].includes(args[0])) body.creds = await forgejoCreds().catch(() => null);
+  // nothing asked (an SSH password, a passphrase) for git the user didn't start: it fails instead
+  if (o.quiet) body.quiet = true;
   const r = await fetch(hostUrl(w.host, '/api/sulfur/git'), jsonPost(body));
   const b = await r.json().catch(() => ({}));
   if (r.status === 404) throw new Error(`${w.host}'s Phosphorus is older than this Sulfur: update the mesh for Source Control there`);
@@ -7531,7 +7554,7 @@ function scmAutoFetch(s, where) {
   if (last && (last.running || Date.now() - last.at < AUTO_FETCH_MS)) return;
   const entry = { running: true, at: Date.now() };
   scmFetched.set(id, entry);
-  git(['fetch', '--prune'], { where })
+  git(['fetch', '--prune'], { where, quiet: true })
     .catch(() => null)
     .then((r) => {
       entry.running = false;
@@ -8016,12 +8039,12 @@ async function gitClone() {
       for (const x of found?.data || []) items.push({ label: x.full_name, description: x.description || '', detail: x.private ? 'private' : '', ic: 'branch', value: x.clone_url, sep: items.length ? '' : `${I.forgejo.host}` });
     } catch {}
   }
-  items.push({ label: 'Clone from an Address…', description: 'https://, ssh:// or git@', ic: 'remote', value: '__url', sep: 'more' });
+  items.push({ label: 'Clone from an Address…', description: 'https://, ssh://, git@ or user@host:/path', ic: 'remote', value: '__url', sep: 'more' });
   const v = await pick(items, { title: 'Clone Repository', placeholder: items.length > 1 ? 'A repository of your mesh’s Forgejo, or an address' : 'Clone from an address', matchDescription: true });
   if (!v || !I) return;
   url = v;
   if (v === '__url') {
-    url = (await inputBox({ title: 'Clone from an Address', placeholder: 'https://git.example.com/owner/repo.git' }))?.trim() || '';
+    url = (await inputBox({ title: 'Clone from an Address', placeholder: 'https://git.example.com/owner/repo.git, or user@host:/path/repo', prompt: standalone?.asks ? 'An SSH password or key passphrase is asked here if the server needs one.' : '' }))?.trim() || '';
     if (!url || !I) return;
   }
   const where = await pickPlace(`Clone ${url.split('/').pop().replace(/\.git$/, '')}: into`, { placeholder: 'The folder the repository goes in' });
@@ -9144,6 +9167,14 @@ function paintWelcome(w) {
     }
     side.append(card);
   }
+  if (sshReady()) {
+    side.append(el('h2', '', 'SSH Hosts'));
+    const card = el('div', 'ide-welcome-mesh');
+    const hosts = sshHostsNow();
+    card.append(el('p', '', hosts.length ? `${hosts.filter((h) => h.connected).length} of ${hosts.length} connected: their files, terminals, builds and Git, over ssh.` : 'A Linux or macOS machine you reach with ssh user@host: its files, terminals, builds and Git, with no mesh.'));
+    card.append(link(hosts.length ? 'Connect to an SSH Host…' : 'Add an SSH Host…', hosts.length ? 'sulfur.ssh.connect' : 'sulfur.ssh.add', 'remote'));
+    side.append(card);
+  }
   side.append(el('h2', '', 'Learn'));
   for (const [label, cmd, ic] of [['Extension Guide', 'sulfur.extensions.guide', 'book'], ['Create an Extension', 'sulfur.extensions.create', 'ext']]) side.append(link(label, cmd, ic));
   cols.append(start, recent, side);
@@ -9174,6 +9205,7 @@ function meshItems(withHost = false) {
       cmdItem('sulfur.mesh.open', `Open ${name}’s Machines`),
       cmdItem('sulfur.mesh.other', 'Connect to Another Mesh…'),
       cmdItem('sulfur.mesh.signOut', `Sign Out of ${name}`),
+      ...sshItems(),
     ];
   }
   return [
@@ -9181,7 +9213,109 @@ function meshItems(withHost = false) {
     '-',
     standalone.server ? cmdItem('sulfur.mesh.connect', `Log In to ${name}…`) : cmdItem('sulfur.mesh.connect', 'Connect to a Phosphorus Mesh…'),
     ...(standalone.server ? [cmdItem('sulfur.mesh.other', 'Connect to Another Mesh…')] : []),
+    ...sshItems(),
   ];
+}
+
+// --- SSH hosts: a machine reached with ssh user@host (a key, the agent or a password), no mesh --
+// the app's own server holds the connection; the page asks what it needs: the host key's
+// trust once, a password or a key's passphrase
+
+const sshReady = () => localDesktop() && !!standalone?.ssh;
+const sshHostsNow = () => (sshReady() ? standalone.ssh.hosts || [] : []);
+
+function sshItems() {
+  if (!sshReady()) return [];
+  const live = sshHostsNow().filter((h) => h.connected);
+  return ['-', ...live.map((h) => ({ label: `${h.name} · ${sshLabel(h)} over SSH`, disabled: true })),
+    cmdItem('sulfur.ssh.connect', 'Connect to SSH Host…'), ...(live.length ? [cmdItem('sulfur.ssh.disconnect', 'Disconnect SSH Host…')] : [])];
+}
+
+// a host saved from what's typed, then connected; a folder named after a colon opened there
+async function sshAddHost() {
+  const address = (await inputBox({ title: 'Add SSH Host', placeholder: 'user@host, user@host:2222, or user@host:/folder', prompt: 'As you’d give ssh. A folder after the colon opens once connected.' }))?.trim();
+  if (!address || !I) return;
+  const r = await standalone.sshAdd(address);
+  if (!I) return;
+  if (!r.ok) { notify('error', r.error || `Couldn’t add ${address}.`); return; }
+  await sshConnectHost(r.host.name, r.path || '');
+}
+
+// a saved host connected (picked when none's named): its host key trusted once, its
+// password or key passphrase asked as the server needs, then a folder of it opened
+async function sshConnectHost(name = '', path = '') {
+  if (!name) {
+    const hosts = sshHostsNow();
+    if (!hosts.length) { await sshAddHost(); return; }
+    name = await pick([
+      ...hosts.map((h) => ({ label: h.name, description: sshLabel(h), detail: h.connected ? 'connected' : '', ic: 'host', value: h.name })),
+      { label: 'Add SSH Host…', ic: 'plus', value: '__add' },
+    ], { title: 'Connect to SSH Host', matchDescription: true });
+    if (!name || !I) return;
+    if (name === '__add') { await sshAddHost(); return; }
+  }
+  const answers = {};
+  for (let round = 0; round < 8; round++) {
+    const note = notify('info', `Connecting to ${name}…`, { progress: true, sticky: true });
+    const r = await standalone.sshConnect(name, { ...answers, remember: !!setting('sulfur.ssh.rememberPasswords') });
+    note.close();
+    if (!I) return;
+    if (r.ok) { sshConnected(r.host, path); return; }
+    if (r.need === 'trust') {
+      const ok = await pick([{ label: 'Trust This Host and Connect', description: r.fingerprint, value: 'yes', ic: 'host' }, { label: 'Cancel', value: 'no' }], { title: `${name}: Unknown Host Key`, placeholder: r.error });
+      if (ok !== 'yes' || !I) return;
+      answers.trust = r.fingerprint;
+      continue;
+    }
+    const box = sshNeedBox(r, name);
+    if (!box) { notify('error', `${name}: ${r.error || 'couldn’t connect'}`); return; }
+    const v = await inputBox(box);
+    if (v === undefined || !I) return;
+    answers[r.need] = v;
+  }
+}
+
+function sshConnected(h, path) {
+  const name = h.name;
+  paintRunView();
+  paintStatus();
+  paintWelcomeSoon();
+  const rel = sshFolder(h.info?.home, path);
+  if (rel) { setRoot(rel, false, { host: name, share: '0' }); notify('info', `Connected to ${name} as ${h.user}: ${path} is open.`); return; }
+  notify('info', `Connected to ${name} as ${h.user}. Its folders are in Open Folder; its terminals, builds and Git run there.`);
+  const home = (h.info?.files?.shares || []).find((x) => x.home);
+  if (home) pickFolder(baseName(h.info?.home || h.user), { host: name, share: String(home.id) });
+}
+
+// a host disconnected (its open files saved first), or forgotten with anything kept for it
+async function sshDropHost(forget) {
+  const hosts = sshHostsNow().filter((h) => forget || h.connected);
+  if (!hosts.length) { notify('info', forget ? 'No SSH host is saved.' : 'No SSH host is connected.'); return; }
+  const name = await pick(hosts.map((h) => ({ label: h.name, description: sshLabel(h), ic: 'host', value: h.name })), { title: forget ? 'Forget SSH Host' : 'Disconnect SSH Host', matchDescription: true });
+  if (!name || !I) return;
+  const r = forget ? await standalone.sshForget(name) : await standalone.sshDisconnect(name);
+  if (!I) return;
+  if (!r.ok) { notify('error', r.error || `Couldn’t ${forget ? 'forget' : 'disconnect'} ${name}.`); return; }
+  paintWelcomeSoon();
+  notify('info', forget ? `${name} is forgotten.` : `Disconnected from ${name}.`);
+}
+
+// git's prompts, one at a time: an SSH password or passphrase, a new host's key, an HTTPS login
+let gitAsking = Promise.resolve();
+function gitAsk(m) {
+  const next = gitAsking.then(async () => {
+    if (!I) return null;
+    I.asking = m.id;
+    const v = await inputBox(askBox(m));
+    if (I?.asking === m.id) I.asking = null;
+    return v === undefined ? null : { value: v, remember: !!m.secret && !!setting('sulfur.ssh.rememberPasswords') };
+  });
+  gitAsking = next.catch(() => null);
+  return next;
+}
+// a prompt answered on another page, or given up on: its box closed here
+function gitAskDone(id) {
+  if (I?.asking === id) closeQuick();
 }
 
 // a mesh connected to from offline: its address (the remembered one unless asked), its

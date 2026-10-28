@@ -24,8 +24,18 @@ Sulfur, while working as a fully offline IDE, can link a mesh and have its machi
   serves Sulfur itself, at `/sulfur/` and in the desktop's Sulfur window: the Phosphorus apps
   page installs the latest release's page (`sulfur-web.tar.gz`, signed with the update key)
   onto every host of the mesh.
+- **SSH hosts** need no mesh at all: any Linux or macOS machine you reach with
+  `ssh user@host` (over a VPN or not), by its key, ssh-agent or password. Remote: Add SSH Host
+  takes the address as ssh or scp write it (`user@172.18.220.63:/srv/repo` opens that folder);
+  its files, live editing, terminals, builds, Git and toolchains then work there. Host keys are
+  checked against `~/.ssh/known_hosts`; passwords stay in memory, never on disk. Language
+  servers and SQLite on SSH hosts are not there yet.
 - **Overlay networks** (Tailscale, Headscale, NetBird, ZeroTier, Nebula) are next: their peers
   as machines, reached over SSH.
+
+Source Control's clone, fetch, pull and push over SSH (`user@host:/path/repo`) ask for a
+password or key passphrase in Sulfur's input box when the server needs one, rather than
+failing; with nobody to ask, they fail at once.
 
 [`docs/mesh-protocol.md`](docs/mesh-protocol.md) covers how meshes of different kinds are added and supported by Sulfur.
 

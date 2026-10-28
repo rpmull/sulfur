@@ -177,6 +177,13 @@ fn headless(args: &[String]) -> i32 {
 }
 
 fn main() {
+    // run by ssh or git as their askpass program: the prompt goes to the page, nothing else starts
+    if let Some(code) = sulfur_service::askpass::helper_main() {
+        std::process::exit(code);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        sulfur_service::askpass::set_helper(exe);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("sulfur-language") if args.len() == 2 => {
