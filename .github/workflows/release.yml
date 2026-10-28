@@ -169,34 +169,13 @@ jobs:
           path: out/
           compression-level: 0
           retention-days: 7
+  # publish.yml, which can also publish a finished run's builds on its own
   publish:
     needs: [version, test, app, web]
-    runs-on: ubuntu-24.04
     permissions:
       contents: write
-    env:
-      VERSION: ${{ needs.version.outputs.version }}
-      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
-      GH_REPO: ${{ github.repository }}
-      LEGACY_TOKEN: ${{ secrets.PHOSPHORUS_FEED_TOKEN }}
-      LEGACY_FEED_REPO: ${{ vars.LEGACY_FEED_REPO || 'pmghartman/phosphorus' }}
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: sulfur-*
-          merge-multiple: true
-          path: out
-      - name: numbered release
-        run: |
-          printf 'Sulfur %s: one native app with its service in process, and compatible Phosphorus mesh and shared files. sulfur-web.tar.gz is the page alone, installed onto a mesh by the Phosphorus apps page.\n' "$VERSION" > notes.md
-          # a run of some platforms publishes what they built
-          shopt -s nullglob
-          files=(out/*.exe out/*.dmg out/*.deb out/*.tar.gz out/*.sig out/LICENSE out/THIRD_PARTY_LICENSES.txt)
-          gh release create "v$VERSION" "${files[@]}" --target "${{ github.sha }}" --title "Sulfur $VERSION" --notes-file notes.md
-      - name: update feeds (retain the existing signing key)
-        run: |
-          gh release view update >/dev/null 2>&1 || gh release create update --prerelease --latest=false --title 'Update feed' --notes 'Signed Sulfur update manifests.'
-          gh release upload update out/feed/*.json --clobber
-          if [ -n "$LEGACY_TOKEN" ]; then
-            GH_TOKEN="$LEGACY_TOKEN" gh release upload update out/feed/*.json --clobber --repo "$LEGACY_FEED_REPO"
-          fi
+      actions: read
+    uses: ./.github/workflows/publish.yml
+    with:
+      run: ${{ github.run_id }}
+    secrets: inherit

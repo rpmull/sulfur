@@ -1,0 +1,67 @@
+# Publishes a release run's builds as v1.0.<commit count> and updates the feeds. release.yml
+# calls it once its builds and tests pass. Run it by hand with a release run's id to publish
+# what that run built (its artifacts last 7 days) without building again, as when only its
+# publish job failed: a re-run would repeat that run's own copy of this job.
+name: publish
+on:
+  workflow_call:
+    inputs:
+      run:
+        description: The release run whose builds are published
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      run:
+        description: Release run id (the number in its address, …/actions/runs/<id>)
+        type: string
+        required: true
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    env:
+      RUN: ${{ inputs.run }}
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+      GH_REPO: ${{ github.repository }}
+      LEGACY_TOKEN: ${{ secrets.PHOSPHORUS_FEED_TOKEN }}
+      LEGACY_FEED_REPO: ${{ vars.LEGACY_FEED_REPO || 'pmghartman/phosphorus' }}
+    steps:
+      - name: the run's commit
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh api "repos/$GH_REPO/actions/runs/$RUN" --jq 'select(.path | startswith(".github/workflows/release.yml")) | .head_sha')
+          if [ -z "$sha" ]; then echo "::error::Run $RUN isn't a release run of $GH_REPO"; exit 1; fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.run.outputs.sha }}
+          fetch-depth: 0
+      # the version release.yml gave the same commit
+      - name: version
+        run: echo "VERSION=1.0.$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          run-id: ${{ inputs.run }}
+          github-token: ${{ github.token }}
+          pattern: sulfur-*
+          merge-multiple: true
+          path: out
+      - name: numbered release
+        run: |
+          printf 'Sulfur %s: one native app with its service in process, and compatible Phosphorus mesh and shared files. sulfur-web.tar.gz is the page alone, installed onto a mesh by the Phosphorus apps page.\n' "$VERSION" > notes.md
+          # a run of some platforms publishes what they built
+          shopt -s nullglob
+          files=(out/*.exe out/*.dmg out/*.deb out/*.tar.gz out/*.sig out/LICENSE out/THIRD_PARTY_LICENSES.txt)
+          gh release create "v$VERSION" "${files[@]}" --target "${{ steps.run.outputs.sha }}" --title "Sulfur $VERSION" --notes-file notes.md
+      - name: update feeds (retain the existing signing key)
+        run: |
+          gh release view update >/dev/null 2>&1 || gh release create update --prerelease --latest=false --title 'Update feed' --notes 'Signed Sulfur update manifests.'
+          gh release upload update out/feed/*.json --clobber
+          if [ -n "$LEGACY_TOKEN" ]; then
+            GH_TOKEN="$LEGACY_TOKEN" gh release upload update out/feed/*.json --clobber --repo "$LEGACY_FEED_REPO"
+          fi
