@@ -20,7 +20,9 @@ Sulfur, while working as a fully offline IDE, can link a mesh and have its machi
 - **[Phosphorus](https://github.com/pmghartman/phosphorus)** gives everything: every host's
   files and the merged home, live sessions, terminals, toolchains and language servers, plus its
   people, Claude Code and opencode agents, models and Forgejo. Every Phosphorus host also
-  serves Sulfur itself, at `/sulfur/` and in the desktop's Sulfur window.
+  serves Sulfur itself, at `/sulfur/` and in the desktop's Sulfur window: the Phosphorus apps
+  page installs the latest release's page (`sulfur-web.tar.gz`, signed with the update key)
+  onto every host of the mesh.
 - **Overlay networks** (Tailscale, Headscale, NetBird, ZeroTier, Nebula) are next: their peers
   as machines, reached over SSH.
 
