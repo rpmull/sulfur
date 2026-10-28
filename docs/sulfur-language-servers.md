@@ -173,7 +173,7 @@ AI suggestions are enabled by default in **Settings → Editor: AI Inline
 Suggestions** (`editor.inlineSuggest.enabled`). After a typing pause of 750 ms
 (`editor.inlineSuggest.delay`, configurable from 200–5000 ms), Sulfur asks the
 selected completion model through the existing mesh Messages gateway. The
-default is `agent-inline`: the model assigned to the inline-suggestions agent in
+default is `agent-sulfur-fast`: the model assigned to the inline-suggestions agent in
 the Agents app, otherwise the smallest ready mesh model. Its fast profile
 disables thinking. A desktop client uses the linked mesh proxy and login;
 without a connected mesh, host-local IntelliSense and word suggestions still work.
@@ -186,7 +186,7 @@ selectors. Automatic routing uses the Agents assignment; selecting a machine
 pins completion to its configured model, shown by filename, and requires that
 machine to have the model ready. This selection does not change the machine's
 model installation or the chat model. The saved `editor.inlineSuggest.model`
-value is `agent-inline` or `phosphorus/<host>`. Use **Refresh machines and
+value is `agent-sulfur-fast` or `phosphorus/<host>`. Use **Refresh machines and
 models** to refresh availability.
 
 - **Tab** accepts a visible IntelliSense choice first, or an AI suggestion when

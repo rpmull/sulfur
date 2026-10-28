@@ -133,8 +133,33 @@ jobs:
           path: out/
           compression-level: 0
           retention-days: 7
+  # the page alone, as Phosphorus's apps page installs it onto a mesh; one job, whatever
+  # platforms were picked
+  web:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.UPDATE_SIGNING_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run build:web
+      - name: signed web build and its feed
+        run: bun scripts/release-web.js
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: sulfur-web
+          path: out/
+          compression-level: 0
+          retention-days: 7
   publish:
-    needs: [version, app]
+    needs: [version, app, web]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -152,7 +177,7 @@ jobs:
           path: out
       - name: numbered release
         run: |
-          printf 'Sulfur %s: one native app with its service in process, and compatible Phosphorus mesh and shared files.\n' "$VERSION" > notes.md
+          printf 'Sulfur %s: one native app with its service in process, and compatible Phosphorus mesh and shared files. sulfur-web.tar.gz is the page alone, installed onto a mesh by the Phosphorus apps page.\n' "$VERSION" > notes.md
           # a run of some platforms publishes what they built
           shopt -s nullglob
           files=(out/*.exe out/*.dmg out/*.deb out/*.AppImage out/*.tar.gz out/*.sig out/LICENSE out/THIRD_PARTY_LICENSES.txt)
