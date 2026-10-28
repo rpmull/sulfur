@@ -100,14 +100,29 @@ function workbench(open) {
   window.addEventListener('focus', () => ide?.focus());
 }
 
+// a file the mesh's desktop asks for, by host, share and path: the home's by its host, another
+// share's by the share itself; null with none named
+function openOf(o) {
+  if (!o?.path) return null;
+  const share = o.share || 'home';
+  return { path: o.path, host: o.host || undefined, loc: share === 'home' ? { host: '*', share } : { host: o.host, share } };
+}
+
 async function start() {
   const info = await sidecarInfo();
   const q = new URLSearchParams(location.search);
   history.replaceState(null, '', location.pathname);
-  // a mesh server's own page: its login is its own, as the desktop's
+  // a mesh server's own page: its login is its own, as the desktop's; a file named in the url
+  // opened, and later ones sent by the desktop's window that holds this page
   if (!info) {
     const me = await bootMesh('');
-    if (me) workbench(null); else location.replace('/?next=' + encodeURIComponent(location.href));
+    if (!me) { location.replace('/?next=' + encodeURIComponent(location.href)); return; }
+    workbench(openOf({ host: q.get('host'), share: q.get('share'), path: q.get('path') }));
+    window.addEventListener('message', (e) => {
+      if (e.origin !== location.origin || e.data?.t !== 'sulfur-open') return;
+      const o = openOf(e.data);
+      if (o) ide?.open(o);
+    });
     return;
   }
   // Always start on this computer; the remembered mesh contributes its hosts.

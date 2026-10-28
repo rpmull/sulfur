@@ -9,6 +9,12 @@ Phosphorus is the first mesh, and the richest. Sulfur's boundary with it is exac
 Phosphorus desktop's Sulfur window, `/sulfur/` on every Phosphorus host and Sulfur's own app
 linked to a Phosphorus mesh all behave the same as before Sulfur had its own repository.
 
+A Phosphorus host serves `/sulfur/` from the release's `sulfur-web.tar.gz`, installed onto
+the mesh by its apps page. The page takes a file to open from its url
+(`/sulfur/?host=H&share=S&path=P`, the home's files with `share=home`), and the desktop's
+window holding it sends later ones as a same-origin `{ t: 'sulfur-open', host, share, path }`
+message.
+
 ## How other projects draw this line
 
 Remote-capable editors and mesh networks split the work the same way.
