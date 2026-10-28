@@ -1,8 +1,8 @@
-import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 
-// Metadata/downloads only. Never compiles dependencies or executes package scripts.
+// Metadata only. Never compiles dependencies or executes package scripts.
 const supplied = process.argv.find((arg) => arg.startsWith('--metadata='))?.slice(11);
 let metadata;
 if (supplied) metadata = JSON.parse(await readFile(supplied, 'utf8'));
@@ -80,31 +80,9 @@ async function npmPackages(folder) {
   }
 }
 await npmPackages('node_modules');
-const bunVersion = JSON.parse(await readFile('package.json', 'utf8'))
-  .packageManager.split('@')
-  .at(-1);
-await mkdir('.tools', { recursive: true });
-const bunLicenseFile = `.tools/bun-${bunVersion}-LICENSE.md`;
-let bunLicense;
-try {
-  bunLicense = await readFile(bunLicenseFile, 'utf8');
-} catch {
-  const response = await fetch(
-    `https://raw.githubusercontent.com/oven-sh/bun/bun-v${bunVersion}/LICENSE.md`,
-  );
-  if (!response.ok) throw new Error('Cannot fetch pinned Bun license');
-  bunLicense = await response.text();
-  await writeFile(bunLicenseFile, bunLicense);
-}
-parts.push({
-  name: `Runtime: Bun@${bunVersion}`,
-  source: `https://github.com/oven-sh/bun/tree/bun-v${bunVersion}`,
-  license: 'MIT and bundled component licenses',
-  texts: [bunLicense],
-});
 const bodies = new Map();
 let text =
-  'Sulfur third-party notices\n\nGenerated from bun.lock, Cargo.lock and the pinned Bun runtime.\nSystem WebView implementations keep their system distributions and licenses.\nBun relinking/source instructions: docs/tauri-js.md.\n\n';
+  'Sulfur third-party notices\n\nGenerated from bun.lock and Cargo.lock.\nSystem WebView implementations keep their system distributions and licenses.\n\n';
 for (const part of parts.sort((a, b) => a.name.localeCompare(b.name))) {
   text += `${part.name}\n${part.source}\nLicense: ${part.license}\n`;
   if (!part.texts.length)
