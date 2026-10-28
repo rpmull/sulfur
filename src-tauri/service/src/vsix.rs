@@ -683,7 +683,8 @@ pub fn convert(data: &[u8], source: Value, options: &Options) -> Res<Converted> 
     if ns.is_empty() || name.is_empty() {
         return fail("package.json names no publisher and name");
     }
-    let id = format!("vsx.{}.{}", clean_id(&ns), clean_id(&name));
+    // the folder name the page and installed extensions use, as the Go converter made it
+    let id = clean_id(&format!("{ns}.{name}")).trim_matches(['.', '-']).to_owned();
     let mut langs = Languages { order: vec![], map: HashMap::new() };
     let mut total = 0usize;
     let add = |report: &mut Vec<Value>, kind: &str, status: &str, name: &str, detail: &str| {
@@ -1459,6 +1460,7 @@ mod tests {
     #[test]
     fn icon_themes_survive_missing_icons() {
         let r = run(&fixtures()[1]).unwrap();
+        assert_eq!(r.id, "pub.ext");
         let theme = data(&r, &r.manifest["contributes"]["iconThemes"][0]);
         assert!(theme["defs"].get("_unused").is_none());
         assert!(theme["defs"]["_file"]["src"].as_str().unwrap().starts_with("data:image/svg+xml;base64,"));
