@@ -476,7 +476,7 @@ const DEFAULTS = () => ({
   root: acct.user, tabs: [], active: '', recent: [], recentFolders: [], workspaces: {},
   side: { view: 'explorer', w: 260, hidden: false },
   panel: { h: 260, hidden: true, view: 'terminal', max: false },
-  aux: { w: 360, hidden: true, agent: '', harness: 'chat', model: 'agent-chat', perm: 'acceptEdits' },
+  aux: { w: 360, hidden: true, agent: '', harness: 'chat', model: 'agent-sulfur', perm: 'acceptEdits' },
   expanded: {}, runHost: '', sections: { tree: true }, bookmarks: [],
   ext: { enabled: {} }, loc: HOME_LOC, build: {},
 });
@@ -495,7 +495,7 @@ const SETTINGS = {
   'editor.format.indentBlocks': { def: true, type: 'boolean', title: 'Formatting: Indent Block Contents', about: 'Indent code inside block braces one level deeper. Turn off to align it with the braces.' },
   'sulfur.csharp.analyzersEnabled': { def: true, type: 'boolean', title: 'C#: Roslyn Analyzers', about: 'Include Roslyn and project analyzer diagnostics for C# solutions. Analysis uses more CPU than compiler diagnostics alone.' },
   'editor.inlineSuggest.enabled': { def: true, type: 'boolean', title: 'Editor: AI Inline Suggestions', about: 'Predict code with the selected completion model through the mesh using a dedicated harness. Sends bounded context from this file and up to two related open files. Tab accepts; Escape dismisses. Works independently of the chat harness.' },
-  'editor.inlineSuggest.model': { def: 'agent-inline', type: 'model', title: 'Editor: Completion Machine / Model', about: 'Use the model the Agents app assigns to inline suggestions, or pin completion to a machine and its configured model. The machine must have that model ready; this does not change its model installation.' },
+  'editor.inlineSuggest.model': { def: 'agent-sulfur-fast', type: 'model', title: 'Editor: Completion Machine / Model', about: 'Use the model the Agents app assigns to inline suggestions, or pin completion to a machine and its configured model. The machine must have that model ready; this does not change its model installation.' },
   'editor.inlineSuggest.delay': { def: 750, type: 'number', min: 200, max: 5000, title: 'Editor: AI Suggestion Delay', about: 'Idle time in milliseconds after meaningful typing before asking the completion model. Blank lines, Enter, indentation, and deletion do not request AI suggestions; Alt+\\ still works anywhere.' },
   'editor.diagnostics.delay': { def: 500, type: 'number', min: 300, max: 5000, title: 'Editor: Syntax Check Delay', about: 'Idle time in milliseconds before Sulfur\'s own syntax check marks half-typed code. A language server\'s problems show as soon as it reports them.' },
   'sulfur.languageServerSettings': { def: {}, type: 'object', title: 'Languages: Server Settings', about: 'Language-server settings, keyed by extension id (typescript, python, javascript, java, csharp, php, shell, cpp, hcl, go). Runtime prerequisites and installation are in Extensions.' },
@@ -5618,8 +5618,9 @@ function setChord(text) { if (I?.sb) I.sb.chord.textContent = text; }
 // agent (a harness bridged in, say) beside them; each conversation kept per
 // user in this browser
 
-// the agent a bare chat asks as, its model assigned in the Agents app
-const CHAT_AGENT = 'agent-chat';
+// the agent a bare chat asks as: Sulfur's own, its model assigned in Phosphorus's agents app;
+// inline completions ask as its fast one, agent-sulfur-fast
+const CHAT_AGENT = 'agent-sulfur';
 // a conversation's open file at most this much of its text
 const SEEN_MAX = 24000;
 
@@ -8538,9 +8539,9 @@ function completionModelSetting(row, about, value) {
   for (const m of machines) machine.append(Object.assign(el('option', '', `${m.host}${m.ready ? '' : ' · offline'}`), { value: m.host, selected: m.host === host }));
   if (host && !machines.some((m) => m.host === host)) machine.append(Object.assign(el('option', '', `${host} · unavailable`), { value: host, selected: true }));
   const model = Object.assign(el('select', 'ide-input ide-select'), { ariaLabel: 'Completion model' });
-  const options = host ? [[value, machines.find((m) => m.host === host)?.label || 'Configured model (unavailable)']] : [['agent-inline', 'As assigned in Agents']];
+  const options = host ? [[value, machines.find((m) => m.host === host)?.label || 'Configured model (unavailable)']] : [['agent-sulfur-fast', 'As assigned in Agents']];
   for (const [id, label] of options) model.append(Object.assign(el('option', '', label), { value: id, selected: id === value }));
-  machine.addEventListener('change', () => setSetting('editor.inlineSuggest.model', machine.value ? `phosphorus/${machine.value}` : 'agent-inline'));
+  machine.addEventListener('change', () => setSetting('editor.inlineSuggest.model', machine.value ? `phosphorus/${machine.value}` : 'agent-sulfur-fast'));
   model.addEventListener('change', () => setSetting('editor.inlineSuggest.model', model.value));
   const refresh = Object.assign(el('button', 'ide-link', I.completionLoading ? 'Loading models…' : 'Refresh machines and models'), { type: 'button', disabled: !!I.completionLoading });
   refresh.addEventListener('click', loadCompletionModels);

@@ -13,7 +13,9 @@ A Phosphorus host serves `/sulfur/` from the release's `sulfur-web.tar.gz`, inst
 the mesh by its apps page. The page takes a file to open from its url
 (`/sulfur/?host=H&share=S&path=P`, the home's files with `share=home`), and the desktop's
 window holding it sends later ones as a same-origin `{ t: 'sulfur-open', host, share, path }`
-message.
+message. On a Phosphorus mesh the editor's chat asks the model gateway as `agent-sulfur` and
+its inline completions as `agent-sulfur-fast`: the Sulfur agent of Phosphorus's agents app,
+listed there while the mesh has Sulfur installed, its models assigned like Tavern's.
 
 ## How other projects draw this line
 
