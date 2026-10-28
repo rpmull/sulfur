@@ -56,8 +56,11 @@ impl Pty {
             .map_err(|e| crate::util::Fail::new(format!("no terminal: {e}"), 500))?;
         let mut cmd = match &opts.cmd {
             Some(line) if cfg!(windows) => {
+                // the builder writes a quote as \", which cmd doesn't read: cmd expands
+                // variables before it parses quotes, so each one reaches it as one
                 let mut c = CommandBuilder::new("cmd.exe");
-                c.args(["/d", "/s", "/c", line]);
+                c.args(["/d", "/s", "/c", &line.replace('"', "%SULFUR_QUOTE%")]);
+                c.env("SULFUR_QUOTE", "\"");
                 c
             }
             Some(line) => {
@@ -610,7 +613,8 @@ mod tests {
     #[tokio::test]
     async fn a_pty_streams_real_output() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let cmd = if cfg!(windows) { "echo sulfur-pty" } else { "printf sulfur-pty" };
+        // a quoted program, as a task's vcvars prefix is
+        let cmd = if cfg!(windows) { r#""%SystemRoot%\System32\cmd.exe" /d /c echo sulfur-pty"# } else { "printf sulfur-pty" };
         let (_pty, exited) = Pty::spawn(Spawn { dir: None, cols: 80, rows: 24, cmd: Some(cmd.into()), env: vec![] }, tx).unwrap();
         let code = tokio::time::timeout(Duration::from_secs(30), exited).await.expect("the terminal never exited");
         assert_eq!(code.unwrap(), 0);
