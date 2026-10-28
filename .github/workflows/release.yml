@@ -176,7 +176,7 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
       GH_REPO: ${{ github.repository }}
       LEGACY_TOKEN: ${{ secrets.PHOSPHORUS_FEED_TOKEN }}
       LEGACY_FEED_REPO: ${{ vars.LEGACY_FEED_REPO || 'pmghartman/phosphorus' }}
