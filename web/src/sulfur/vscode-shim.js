@@ -523,6 +523,13 @@ export function vscodeShim(api, host) {
     EndOfLine: { LF: 1, CRLF: 2 },
     DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
     LogLevel: { Off: 0, Trace: 1, Debug: 2, Info: 3, Warning: 4, Error: 5 },
+    // read at load as lookup tables, so they're here even where their providers aren't
+    SymbolKind: Object.fromEntries('File Module Namespace Package Class Method Property Field Constructor Enum Interface Function Variable Constant String Number Boolean Array Object Key Null EnumMember Struct Event Operator TypeParameter'.split(' ').map((k, i) => [k, i])),
+    SymbolTag: { Deprecated: 1 },
+    CompletionItemKind: Object.fromEntries('Text Method Function Constructor Field Variable Class Interface Module Property Unit Value Enum Keyword Snippet Color File Reference Folder EnumMember Constant Struct Event Operator TypeParameter User Issue'.split(' ').map((k, i) => [k, i])),
+    DiagnosticTag: { Unnecessary: 1, Deprecated: 2 },
+    TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
+    QuickPickItemKind: { Separator: -1, Default: 0 },
     window, workspace, commands, env, l10n, languages, extensions,
   }, {
     get(t, k) {

@@ -34,6 +34,14 @@ test('uris are paths of the home, joined and printed as VS Code prints them', ()
   assert.equal(shim.context.extension.packageJSON.name, 'ext');
 });
 
+test('enums read at load carry VS Code\'s own numbers', () => {
+  const { vscode } = harness();
+  assert.equal(vscode.SymbolKind.Namespace, 2);
+  assert.equal(vscode.SymbolKind.TypeParameter, 25);
+  assert.equal(vscode.CompletionItemKind.Issue, 26);
+  assert.equal(vscode.QuickPickItemKind.Separator, -1);
+});
+
 test('configuration answers the extension\'s own defaults, by key and by section', async () => {
   const { vscode } = harness();
   const c = vscode.workspace.getConfiguration('ext');
