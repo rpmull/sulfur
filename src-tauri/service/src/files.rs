@@ -567,6 +567,10 @@ impl Files {
                     if fs::symlink_metadata(&dest).is_ok() {
                         return fail_at("destination exists", 409);
                     }
+                    // a first extension moves into an extensions folder that isn't there yet
+                    if let Some(dir) = dest.parent() {
+                        fs::create_dir_all(dir)?;
+                    }
                     fs::rename(&target, &dest)?;
                 }
                 "delete" => {
@@ -713,6 +717,8 @@ mod tests {
         assert!(up("1", "xy").await.unwrap_err().message.contains("offset"));
         assert_eq!(up("3", "de").await.unwrap(), json!({ "ok": true, "path": "out.bin" }));
         assert_eq!(fs::read_to_string(root.join("out.bin")).unwrap(), "abcde");
+        files.mutate("0", "rename", &json!({ "from": "dir/empty", "to": "new/parents/moved" })).await.unwrap();
+        assert!(root.join("new/parents/moved").is_dir());
     }
 
     #[cfg(unix)]
