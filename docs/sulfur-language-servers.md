@@ -24,11 +24,12 @@ consistent repository-activity measure rather than mixing the two rankings.
 
 ## Servers and runtime prerequisites
 
-The local language host is JavaScript in `server/languages.js`, running in Bun.
-It also accepts the existing `sulfur-language` helper protocol. A Phosphorus mesh
+The local language host is Rust in `src-tauri/service/src/languages.rs`, running
+inside the Sulfur app. The app also answers the existing `sulfur-language` helper
+protocol as `sulfur sulfur-language <base64 request>`. A Phosphorus mesh
 continues to select its own `phosphorus` helper on remote hosts, independently
-of the implementation running in the Sulfur app. Packaged Sulfur includes Bun;
-Node.js is still needed for servers that require it. All installation
+of the implementation running in the Sulfur app. Node.js is still needed for
+servers that require it. All installation
 directories belong to that login, at `~/.sulfur/languages/<extension id>` in its
 actual OS home. These executable packages are separate from the merged-home
 sandboxed JavaScript extensions.
@@ -243,12 +244,13 @@ uses smaller keyboard steps. Narrow windows retain the existing drawer layout.
 ## Focused verification without an application build
 
 ```text
+cargo test --manifest-path src-tauri/Cargo.toml -p sulfur-service
 node --test web/tests/*.test.mjs
-bun test ./tests
 ```
 
-The JavaScript service tests cover the wire framing and project/virtual-document
-boundaries alongside files, collaboration, SQLite and extension conversion. Native
+The service's Rust tests cover the wire framing and project/virtual-document
+boundaries alongside files, collaboration, SQLite and extension conversion. They
+compile the service crate, not the application. Native
 installer transactions and platform-specific servers require the acceptance
 checks in `docs/tauri-js.md`. They never
 download a real language server or compile the application. The other platform-specific

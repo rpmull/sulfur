@@ -450,18 +450,19 @@ export function activate(api) {
 - Your editors are live sessions: anyone with the same file open, an agent included, edits the same text you see.
 
 
-## JavaScript desktop runtime
+## Node extensions in the desktop app
 
 Open VSX browser builds continue to run in sandboxed frames. Their local CommonJS
 and ES module dependencies are bundled at conversion time. Node-only packages
-can now use a separate Bun process on this computer, including Node filesystem,
-process and package APIs, while their VS Code calls use the same Sulfur bridge.
-Native Node code has the OS permissions of the user; enabling it requires the
+can now run in a separate process on this computer, on the Node.js (or Bun)
+found on PATH, including Node filesystem, process and package APIs, while their
+VS Code calls use the same Sulfur bridge. Without Node.js or Bun on PATH they
+don't start. Native Node code has the OS permissions of the user; enabling it requires the
 existing extension trust decision. It cannot run against a remote workspace by
 mistaking that workspace for a local folder.
 
 Declarative contributions and extracted language servers remain usable without
 running package code. Unsupported VS Code services (such as debug adapter hosting)
-remain explicitly reported. Bun's Node compatibility and a JavaScript host expand
-compatibility; they do not imply support for every VS Code API or binary addon.
+remain explicitly reported. A Node.js extension host expands compatibility; it
+does not imply support for every VS Code API or binary addon.
 See [the migration acceptance checks](tauri-js.md).

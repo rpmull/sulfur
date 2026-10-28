@@ -1,18 +1,20 @@
 # Tauri migration and developer acceptance
 
-The migration replaced Sulfur's Go application and Go build tools with Tauri 2,
-Bun 1.4.4 and JavaScript. Rust is limited to native window/dialog/update lifecycle
-and forwarding legacy executable helper commands. The service and extension
-compatibility work live in JavaScript. The original Go checkout and Phosphorus
-working tree are separate and were not modified by it.
+The migration replaced Sulfur's Go application and Go build tools with Tauri 2.
+Sulfur's local service is a Rust crate (`src-tauri/service`) running inside the
+Tauri process: one executable, no sidecar and no second runtime. The page and
+the Node extension host remain JavaScript, and Bun 1.4.4 runs the web build and
+the repository's scripts. The original Go checkout and Phosphorus working tree
+are separate and were not modified by the migration.
 
 ## Running and building
 
-Install Bun 1.4.4, Rust 1.90 or newer, Node 22+ for the existing frontend tests,
-and [the native Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
-Packaged users need no Bun, Go or Node installation for the IDE itself. Language
-servers retain their existing prerequisites; Node-based language servers still
-use Node. Bun's runtime sets the platform floor (including macOS 13+).
+Install Rust 1.90 or newer, Bun 1.4.4, Node 22+ for the frontend and extension
+host tests, and [the native Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Packaged users need no Bun, Go or Node installation for the IDE itself. Converted
+Node extensions run on the Node.js (or Bun) found on PATH, and language servers
+retain their existing prerequisites; Node-based language servers still use Node.
+The macOS app targets macOS 13 or newer.
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -23,19 +25,25 @@ bun run dev
 bun run build
 ```
 
-The user-run build first creates hashed/minified/split web assets with compressed
-text copies, then compiles the JS service and its SQLite process helper into a sidecar.
-Tauri packages the sidecar and resources with the native shell. Build for each
-native architecture; the release workflow uses separate Intel/ARM macOS and Linux
-jobs. Developer builds omit signed updater artifacts so no production signing key is needed.
-The manual release configuration enables them with the existing keys. Build outputs are ignored. `packaging/sulfur/build.sh` forwards to Tauri.
-The existing frontend dependency pins and grammar patches are preserved.
+The user-run build first creates hashed/minified/split web assets in `dist/`,
+plus the bundled Node extension host. Cargo then builds the app: the service's
+build script compresses each text asset of `dist/` into the binary once
+(source maps, `.gz` copies and unused font formats are left out), so the
+installed app has no resource folder for the page. Tauri packages the one
+executable with its license files. Build for each native architecture; the
+release workflow uses separate Intel/ARM macOS and Linux jobs. Developer builds
+omit signed updater artifacts so no production signing key is needed. The
+manual release configuration enables them with the existing keys. Build outputs
+are ignored. `packaging/sulfur/build.sh` forwards to Tauri. The existing frontend
+dependency pins and grammar patches are preserved.
 
-`bun run start` serves the local APIs and a developer-built `dist/` at
-`http://127.0.0.1:47615/sulfur/`. The packaged app retains `-headless`, `-addr` and
-`-config`; the shell forwards helper/headless commands before desktop startup.
-The service accepts both single- and double-dash address/config options.
-The default config file remains the OS config directory's `Sulfur/sulfur.json`.
+`bun run dev` opens the Tauri window; debug builds serve `dist/` from disk, so
+a rebuilt page needs only a reload. `bun run start` runs the service headless
+(`sulfur -headless`), serving the local APIs and a developer-built `dist/` at
+`http://127.0.0.1:47615/sulfur/`. The app retains `-headless`, `-addr`,
+`-config` and `-dist`, as single- or double-dash options, and handles the helper
+commands before any window opens. The default config file remains the OS config
+directory's `Sulfur/sulfur.json`.
 
 ## Compatibility boundaries
 
@@ -56,28 +64,30 @@ The default config file remains the OS config directory's `Sulfur/sulfur.json`.
 Phosphorus may keep its existing remote helper implementation, including
 `phosphorus sulfur-language` and `phosphorus sulfur-sqlite`. Sulfur also retains
 `sulfur sulfur-language <base64 request>` and `sulfur sulfur-sqlite` (JSON stdin)
-through its packaged shell, with direct equivalents on `sulfur-service` or
-`bun server/main.js`. No Go source/module remains here. Go consumers must pin the
-last compatible Go revision until they adopt the service protocol; linking a
+in its own executable. No Go source/module remains here. Go consumers must pin
+the last compatible Go revision until they adopt the service protocol; linking a
 mesh does not require changing that mesh's implementation.
 
-Only Phosphorus is a shipped mesh provider. `server/mesh.js` has a capability-based
-registration seam for other providers. The [mesh protocol](mesh-protocol.md)
-records the comparison with Tailscale/Headscale, NetBird, ZeroTier, Nebula, Zed,
-VS Code Remote and DevPod, including what an actual adapter still needs.
+Only Phosphorus is a shipped mesh provider. `PROVIDERS` in
+`src-tauri/service/src/mesh.rs` lists the mesh kinds and their capabilities. The
+[mesh protocol](mesh-protocol.md) records the comparison with Tailscale/Headscale,
+NetBird, ZeroTier, Nebula, Zed, VS Code Remote and DevPod, including what an
+actual adapter still needs.
 
 ## Extension compatibility
 
 Declarative conversion retains themes/includes/plists, icons/fonts, language
 configurations, TextMate grammars, snippets, keybindings and extracted native LSP
 servers. Existing browser packages remain sandboxed. New browser conversions
-bundle package-local CommonJS/ESM dependencies and externalize `vscode` to the
-existing bridge. Runtime bundling occurs only on the user's Convert action.
+join package-local CommonJS/ESM dependencies into one file and leave `vscode` to
+the existing bridge. That happens only on the user's Convert action, and package
+code is read, never run.
 
-Node-only extensions can now resolve their packaged dependencies and Node APIs in
-a separate Bun process. Their VS Code API, command/event, sidebar and webview
-messages reuse the existing frontend bridge. Binary/structured values survive
-the socket/stdin transport. Native filesystem paths are supplied on Windows and
+Node-only extensions resolve their packaged dependencies and Node APIs in a
+separate process on the Node.js (or Bun) found on PATH, running Sulfur's bundled
+extension host. Their VS Code API, command/event, sidebar and webview messages
+reuse the existing frontend bridge. Binary/structured values survive the
+socket/stdin transport. Native filesystem paths are supplied on Windows and
 POSIX. Disabling the extension closes its process. Package install scripts are
 not executed during conversion. The existing trust decision applies; native
 extension code has the user's OS filesystem/process permissions.
@@ -89,28 +99,27 @@ package testing. A native extension requiring a remote workspace is rejected
 until an authenticated extension host exists on that machine; local paths never
 substitute for remote ones. Existing hosted browser builds remain available.
 
-## Verification performed without builds
+## Verification
 
-The service/extension tests exercise real filesystem operations, native Windows
-PTY output, Git staging/commits/diffs, SQLite workers/authorizer/rollback/triggers,
-LSP framing/document gates, mesh HTTP and WebSocket proxying (including shared-home
-paths/cookies), concurrent edits, disk conflicts, legacy conversion fixtures and
-reference minisign signatures. A real Bun extension process activates an extension
-using Node filesystem APIs, a CommonJS dependency, an ES module and binary VS Code
-filesystem RPC. Configuration is checked against the pinned Tauri schema. The
-original frontend suite remains in `web/tests`.
+`bun run test` runs three suites:
 
-Dependency installation uses `--ignore-scripts`. Rust verification here is source
-formatting and locked dependency metadata, not compilation. No web, sidecar,
-native app or installer build has been run by the agent. Browser-extension bundling
-is authored but intentionally not executed as a build during verification.
-Headless update requests stage a verified package for manual installation; automatic
-installation currently runs through the Tauri shell in desktop sessions.
-No performance benchmark claim or complete native parity claim follows from the
-unit checks alone. In particular, Node's SQLite interface does not expose the old
-native `sqlite3_limit` allocation setting; its SQL-size, column-count, output,
-preview and timeout guards are retained, but a single giant native allocation
-needs separate resource testing.
+- The service's Rust tests (`cargo test -p sulfur-service`) exercise real
+  filesystem operations, native PTY output (ConPTY on Windows), tasks and their
+  exit codes, Git staging/commits/diffs, SQLite deadlines/authorizer/rollback/
+  triggers, LSP framing and document gates, UTF-16 OT including split surrogate
+  pairs, Open VSX conversion fixtures and reference minisign signatures. An
+  end-to-end test runs the service on its own loopback port and checks that
+  requests are held to its page, the mesh is passed through, and files,
+  terminals and tasks work over the wire.
+- `tests/` runs the Node extension host under Node: a real extension process
+  activates an extension using Node filesystem APIs, a CommonJS dependency, an
+  ES module and binary VS Code filesystem RPC. The Tauri configuration is checked
+  against the pinned Tauri schema.
+- `web/tests` is the original frontend suite.
+
+The Rust tests compile the service crate; nothing else is built. Dependency
+installation uses `--ignore-scripts`. No performance benchmark claim or complete
+native parity claim follows from the unit checks alone.
 
 ## Native acceptance after the developer builds
 
@@ -132,8 +141,8 @@ Before releasing, exercise Windows, Linux and both Mac architectures:
 5. Measure cold/warm startup, idle memory, large tree/search and transfer behavior,
    terminal throughput, concurrent editing, SQLite cancellation/allocations and
    extension activation against the Go app. Streaming, bounded concurrency,
-   caching, worker reuse, minification/compression and compiled bytecode are in
-   place; their end-to-end gains still need measurements.
+   caching and compressed embedded assets are in place; their end-to-end gains
+   still need measurements.
 
 These checks require native builds and target hosts, and are intentionally left
 to the developer under `AGENTS.md`.
@@ -159,9 +168,5 @@ published on the numbered release; `update` holds the compatible JSON manifests.
 `PHOSPHORUS_FEED_TOKEN` optionally mirrors those manifests to `LEGACY_FEED_REPO`.
 
 `bun run licenses` gathers locked Rust metadata and installed npm license texts
-without compiling anything, plus Bun's pinned license/component notice. The
-[official Bun license](https://bun.com/docs/project/license) explains its statically
-linked components and relinking steps. This repository supplies the application
-source and JS build inputs: build a modified Bun runtime from its pinned source
-and use it to rerun `scripts/package-sidecar.js` to replace/relink the runtime.
-Native distributions include `LICENSE` and `THIRD_PARTY_LICENSES.txt`.
+into `THIRD_PARTY_LICENSES.txt` without compiling anything. Native distributions
+include `LICENSE` and `THIRD_PARTY_LICENSES.txt`.

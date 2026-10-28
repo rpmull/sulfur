@@ -29,24 +29,28 @@ Sulfur, while working as a fully offline IDE, can link a mesh and have its machi
 
 ## Development
 
-Sulfur's desktop shell is Tauri 2. The IDE services, package conversion, language
-server management and extension host run in Bun/JavaScript. Packaged apps include
-the Bun runtime; users do not install Go, Bun or Node to run the editor. Individual
-language servers retain their documented toolchain prerequisites.
+Sulfur is one Tauri 2 executable. Its local service (files, live editing,
+terminals, tasks, Git, SQLite, language servers and Open VSX conversion) is the
+Rust crate in `src-tauri/service`, running inside the app process, with the web
+page compressed into the binary. Users do not install Go, Bun or Node to run the
+editor. Converted Node extensions run on the Node.js (or Bun) found on PATH, and
+individual language servers keep their documented toolchain prerequisites.
 
-Install Bun **1.4.4**, Rust **1.90+**, Node **22+** for the existing frontend tests,
-and [Tauri's native prerequisites](https://v2.tauri.app/start/prerequisites/).
+Install Rust **1.90+**, Bun **1.4.4** for the web build and scripts, Node **22+**
+for the frontend and extension host tests, and
+[Tauri's native prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
-bun run test                 # service/extension and existing frontend tests; no build
+bun run test                 # Rust service tests, extension host and frontend tests
 bun run check                # syntax, configuration and dependency boundary checks
-bun run dev                  # developer-run: web build, JS service and Tauri window
-bun run build                # developer-run: this OS's native installer and sidecar
+bun run dev                  # developer-run: the Tauri window, serving dist/ from disk
+bun run build                # developer-run: web build, then this OS's native installer
 ```
 
 `bun run build:web` produces a separately hostable page in `dist/`.
-`bun run start` serves that page and the local APIs at `127.0.0.1:47615`.
+`bun run start` runs the service headless, serving that page and the local APIs
+at `127.0.0.1:47615`.
 All build commands above are for the developer to run; repository instructions
 prohibit agents from running builds.
 

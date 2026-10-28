@@ -48,19 +48,19 @@ The existing frontend boundary tests enforce this from Sulfur's side.
 
 ### 2. Host services and helper commands
 
-| service | JavaScript owner | version 1 boundary |
-|---------|------------------|--------------------|
-| files/tree/search/upload | `server/files.js` | `/api/files/<host>/<operation>` |
-| live edit/disk conflicts | `server/collab.js` | `/api/code/<host>` socket |
-| terminals and reconnect | `server/processes.js` | `/api/term/<host>` socket |
-| toolchains, tasks, Git | `server/processes.js` | `/api/sulfur/toolchains`, `/run`, `/git` |
-| language management/LSP | `server/languages.js` | `/api/sulfur/languages` socket |
-| SQLite | `server/sqlite.js` | `/api/sulfur/sqlite` |
-| Open VSX | `server/registry.js`, `server/vsix.js` | `/api/sulfur/vsx/*` |
+| service | owner in `src-tauri/service/src` | version 1 boundary |
+|---------|----------------------------------|--------------------|
+| files/tree/search/upload | `files.rs` | `/api/files/<host>/<operation>` |
+| live edit/disk conflicts | `collab.rs`, `ot.rs` | `/api/code/<host>` socket |
+| terminals and reconnect | `processes.rs` | `/api/term/<host>` socket |
+| toolchains, tasks, Git | `processes.rs` | `/api/sulfur/toolchains`, `/run`, `/git` |
+| language management/LSP | `languages.rs` | `/api/sulfur/languages` socket |
+| SQLite | `sqlite.rs` | `/api/sulfur/sqlite` |
+| Open VSX | `registry.rs`, `vsix.rs`, `bundle.rs` | `/api/sulfur/vsx/*` |
 
-`server/main.js sulfur-language <base64-request>` accepts the same request fields
-and newline JSON messages, and `server/main.js sulfur-sqlite` accepts its JSON
-request on stdin. Packaged `sulfur-service` accepts these commands directly.
+`sulfur sulfur-language <base64-request>` accepts the same request fields and
+newline JSON messages, and `sulfur sulfur-sqlite` accepts its JSON request on
+stdin. Both run from the app's own executable before any window opens.
 Phosphorus can keep invoking `phosphorus sulfur-language` and
 `phosphorus sulfur-sqlite` on its own hosts: those remote helpers belong to that
 mesh and do not need to switch implementations for the IDE to connect.
@@ -68,7 +68,7 @@ mesh and do not need to switch implementations for the IDE to connect.
 The former Go `hostkit` source is absent from this repository. Existing Go importers
 must pin the last compatible Go revision (or retain that implementation in their
 own codebase) until they move to the service/CLI protocol. Do not replace a Go
-module pin with this JS branch and expect Go imports to resolve. The separate
+module pin with this repository and expect Go imports to resolve. The separate
 checkout used by the Phosphorus extraction is unchanged by this migration.
 
 ### 3. The API: what Sulfur's page calls
@@ -84,14 +84,14 @@ computer's part itself, so it works offline.
 | `home` | the merged home (`files` on the `home` share across hosts) | this computer's home | one home across hosts |
 | `sessions` | `/api/code/<host>?share=…&path=…` (socket), alongside `/api/files/…` | this computer | every host, edited together |
 | `terminals` | `/api/term/` (socket) | this computer | every host |
-| `toolchains`, `runs`, `languages`, `git`, `sqlite`, `vsx` | `/api/sulfur/*` | this computer, by the Bun service | every host, by its mesh service/helper |
+| `toolchains`, `runs`, `languages`, `git`, `sqlite`, `vsx` | `/api/sulfur/*` | this computer, by the service in the app | every host, by its mesh service/helper |
 | `people` | sharing a file, `/api/me/vault` | — | the mesh's people |
 | `agents` | `/api/code/*` | — | Claude Code and opencode on any host |
 | `models` | `/api/model/v1/*` | — | chat and inline suggestions |
 | `forgejo` | `/api/sulfur/forgejo` | — | the mesh's Forgejo |
 
 Sulfur's server reports the linked mesh's kind and capabilities in `/api/sidecar/info` as
-`mesh: { kind, version: 1, caps }`. `server/mesh.js` defines and registers providers. Only `phosphorus` is implemented
+`mesh: { kind, version: 1, caps }`. `PROVIDERS` in `src-tauri/service/src/mesh.rs` lists the kinds. Only `phosphorus` is implemented
 today. The overlay integrations below are extension designs, not working providers.
 
 ### State and compatibility
@@ -134,10 +134,11 @@ can release independently once Phosphorus pins a published compatible Sulfur ver
 
 ## Adding a kind of mesh
 
-A provider registers `{kind, version: 1, caps, normalize, reach}` through
-`registerMeshProvider` in `server/mesh.js`. Normalization returns the HTTP gateway
-for that provider; reachability is checked before the endpoint is remembered.
-The gateway translates its network discovery, authentication and host transport
+A provider is an entry `{kind, version: 1, caps}` in `PROVIDERS` in
+`src-tauri/service/src/mesh.rs`. The typed server address is normalized to the
+provider's HTTP gateway and checked as reachable before it is remembered; today
+`server_url` and `reach` do that for Phosphorus, and a kind with different
+address or reachability rules needs its own. The gateway translates its network discovery, authentication and host transport
 into the version 1 APIs under `/api/mesh/`.
 
 - **Phosphorus** is built in. Sulfur proxies to its existing server, which owns
@@ -149,5 +150,5 @@ into the version 1 APIs under `/api/mesh/`.
   merged `home`, `people`, `agents`, `models` or `forgejo` without implementing them.
 
 A future native extension host on a remote workspace also needs an explicit,
-authenticated host service. The local Bun extension process rejects remote
+authenticated host service. The local Node extension process rejects remote
 workspace locations rather than reading similarly named local paths.
