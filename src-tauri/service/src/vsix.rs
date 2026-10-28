@@ -19,6 +19,23 @@ fn tables() -> &'static Value {
     T.get_or_init(|| serde_json::from_str(include_str!("../../../assets/vsx-tables.json")).expect("vsx tables"))
 }
 
+/// VS Code language extensions Sulfur's native servers stand in for: their ids, the
+/// languages.rs catalog ids that serve them, and the languages' names
+const EDITOR_SERVERS: &[(&str, &[&str], &str)] = &[
+    ("vscode.typescript-language-features", &["typescript", "javascript"], "TypeScript and JavaScript"),
+    ("ms-python.python", &["python"], "Python"),
+    ("ms-python.vscode-pylance", &["python"], "Python"),
+    ("redhat.java", &["java"], "Java"),
+    ("ms-dotnettools.csharp", &["csharp"], "C#"),
+    ("ms-dotnettools.csdevkit", &["csharp"], "C#"),
+    ("bmewburn.vscode-intelephense-client", &["php"], "PHP"),
+    ("mads-hartmann.bash-ide-vscode", &["shell"], "Shell"),
+    ("ms-vscode.cpptools", &["cpp"], "C/C++"),
+    ("llvm-vs-code-extensions.vscode-clangd", &["cpp"], "C/C++"),
+    ("hashicorp.terraform", &["hcl"], "Terraform"),
+    ("golang.go", &["go"], "Go"),
+];
+
 fn list(x: &Value) -> Vec<Value> {
     match x {
         Value::Null => vec![],
@@ -1218,6 +1235,7 @@ pub fn convert(data: &[u8], source: Value, options: &Options) -> Res<Converted> 
             }
         }
     }
+    let mut editors = Map::new();
     if !entry.is_empty() {
         let mut bytes = 0usize;
         let mut rels: Vec<(&String, &Vec<u8>)> = pkg.files.iter().collect();
@@ -1248,6 +1266,27 @@ pub fn convert(data: &[u8], source: Value, options: &Options) -> Res<Converted> 
                     binary.insert(target, json!(STANDARD.encode(data)));
                 }
             }
+        }
+        // code that asks the editor's language servers (vscode.execute…Provider) and names the
+        // VS Code extension behind each: Sulfur's native server for that language stands in
+        let code: Vec<&str> = files
+            .iter()
+            .filter(|(k, _)| !k.contains("/node_modules/") && [".js", ".cjs", ".mjs"].iter().any(|e| k.ends_with(e)))
+            .filter_map(|(_, v)| v.as_str())
+            .collect();
+        let asks = Regex::new(r"vscode\.execute(DocumentSymbol|Definition|Declaration|TypeDefinition|Implementation|Reference)Provider").unwrap();
+        if code.iter().any(|s| asks.is_match(s)) {
+            let named: Vec<&(&str, &[&str], &str)> = EDITOR_SERVERS.iter().filter(|(id, ..)| code.iter().any(|s| s.contains(&format!("\"{id}\"")) || s.contains(&format!("'{id}'")))).collect();
+            for (id, langs, _) in &named {
+                editors.insert((*id).into(), json!(langs));
+            }
+            let served: Vec<String> = named.iter().map(|(id, _, title)| format!("{title} ({id})")).collect();
+            let detail = if served.is_empty() {
+                "Asks the editor's language servers; Sulfur's native servers answer for the workspace's files".to_owned()
+            } else {
+                format!("Asks the editor's language servers; Sulfur's native servers stand in for {}", served.join(", "))
+            };
+            add(&mut report, "languageServers", if served.is_empty() { "partial" } else { "converted" }, "language features", detail.as_str());
         }
         if runtime == "bun" {
             files.insert("vscode/node_modules/vscode/index.js".into(), json!("module.exports = globalThis.__sulfurVSCode;\n"));
@@ -1288,10 +1327,18 @@ pub fn convert(data: &[u8], source: Value, options: &Options) -> Res<Converted> 
                     .collect(),
             ),
         );
+        // each container's title and its activity bar icon, a file of the package (not a $(codicon))
         let mut containers = HashMap::new();
+        let mut icons = HashMap::new();
         for group in c["viewsContainers"].as_object().into_iter().flat_map(|o| o.values()) {
             for v in list(group) {
                 containers.insert(text(&v["id"]), pkg.localize(&v["title"]));
+                let icon = text(&v["icon"]);
+                let icon = icon.trim_start_matches("./");
+                let path = format!("vscode/{icon}");
+                if !icon.is_empty() && !icon.starts_with("$(") && !icon.contains("..") && (files.contains_key(&path) || binary.contains_key(&path)) {
+                    icons.insert(text(&v["id"]), path);
+                }
             }
         }
         let mut views = Vec::new();
@@ -1302,6 +1349,9 @@ pub fn convert(data: &[u8], source: Value, options: &Options) -> Res<Converted> 
                 o.insert("container".into(), json!(container));
                 let title = containers.get(container).filter(|t| !t.is_empty()).cloned().unwrap_or_else(|| container.clone());
                 o.insert("containerTitle".into(), json!(title));
+                if let Some(icon) = icons.get(container) {
+                    o.insert("containerIcon".into(), json!(icon));
+                }
                 views.push(Value::Object(o));
             }
         }
@@ -1362,6 +1412,9 @@ pub fn convert(data: &[u8], source: Value, options: &Options) -> Res<Converted> 
     let mut sulfur = json!({ "declarative": entry.is_empty(), "converted": Value::Object(source.clone()), "report": report });
     if !entry.is_empty() {
         sulfur["vscode"] = json!({ "root": "vscode", "id": format!("{ns}.{name}"), "defaults": defaults, "runtime": runtime });
+        if !editors.is_empty() {
+            sulfur["vscode"]["editors"] = Value::Object(editors);
+        }
     }
     let mut display = pkg.localize(&m["displayName"]);
     if display.is_empty() {
@@ -1381,6 +1434,14 @@ pub fn convert(data: &[u8], source: Value, options: &Options) -> Res<Converted> 
     }
     if !entry.is_empty() {
         manifest["main"] = json!(format!("vscode/{entry}"));
+    }
+    // the package's own icon beside the manifest, for the extension list and page
+    let icon = text(&m["icon"]);
+    let icon = icon.trim_start_matches("./");
+    let kind = icon.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if let Some(data) = pkg.files.get(icon).filter(|_| !icon.contains("..") && ["png", "svg", "jpg", "jpeg", "gif", "webp"].contains(&kind.as_str())) {
+        binary.insert(format!("icon.{kind}"), json!(STANDARD.encode(data)));
+        manifest["icon"] = json!(format!("icon.{kind}"));
     }
     files.insert("package.json".into(), json!(stringify(&manifest)));
     let lines: Vec<String> = report
@@ -1529,6 +1590,32 @@ mod tests {
         assert!(bad.report.iter().all(|x| x["status"] == "skipped"));
         assert!(convert(b"bad", json!({}), &Options { commands: vec![], prefer_node: false }).is_err());
         assert!(run(&f[f.len() - 2]).is_err());
+    }
+
+    #[test]
+    fn language_servers_asked_for_and_icons_carry_over() {
+        let manifest = json!({
+            "publisher": "pub", "name": "graph", "version": "1.0.0", "main": "./out/extension.js", "icon": "media/icon.png",
+            "contributes": {
+                "viewsContainers": { "activitybar": [{ "id": "graph", "title": "Graph", "icon": "media/graph.svg" }, { "id": "plain", "title": "Plain", "icon": "$(graph)" }] },
+                "views": { "graph": [{ "id": "graph.main", "name": "Main" }], "plain": [{ "id": "plain.main", "name": "Plain" }] },
+            },
+        });
+        let files = json!({
+            "extension/package.json": manifest.to_string(),
+            "extension/out/extension.js": "const v = require('vscode'); exports.activate = () => v.commands.executeCommand(\"vscode.executeDocumentSymbolProvider\", u);\nconst ts = { id: \"vscode.typescript-language-features\" }, rs = { id: \"rust-lang.rust-analyzer\" };",
+            "extension/media/graph.svg": "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+            "extension/media/icon.png": "png",
+        });
+        let r = convert(&zip(files.as_object().unwrap()), json!({}), &Options { commands: vec![], prefer_node: false }).unwrap();
+        assert_eq!(r.manifest["sulfur"]["vscode"]["editors"], json!({ "vscode.typescript-language-features": ["typescript", "javascript"] }));
+        let lsp = r.report.iter().find(|x| x["kind"] == "languageServers").unwrap();
+        assert!(lsp["detail"].as_str().unwrap().contains("TypeScript and JavaScript (vscode.typescript-language-features)"));
+        let views = r.manifest["contributes"]["views"].as_array().unwrap();
+        assert_eq!(views.iter().find(|v| v["id"] == "graph.main").unwrap()["containerIcon"], "vscode/media/graph.svg");
+        assert!(views.iter().find(|v| v["id"] == "plain.main").unwrap().get("containerIcon").is_none());
+        assert_eq!(r.manifest["icon"], "icon.png");
+        assert!(r.binary.contains_key("icon.png"));
     }
 
     #[test]

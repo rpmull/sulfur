@@ -1,4 +1,4 @@
-import { LANGUAGE_EXTENSIONS, languageId, positionAt, offsetAt, relativeUri, applyTextEdits, textEditRanges, completionEdits, snippetText, languageSocket, serverSettings } from './language-client.js';
+import { LANGUAGE_EXTENSIONS, languageId, positionAt, offsetAt, relativeUri, uriPath, applyTextEdits, textEditRanges, completionEdits, snippetText, languageSocket, serverSettings } from './language-client.js';
 import { isWordChar, wordBefore, rankCompletions, wordCompletions, kindOf, inCommentOrString, sameCompletionWord } from './completion.js';
 import { reindent } from './format.js';
 import { inlineSuffix, preferLanguageCompletion } from './inline-completion.js';
@@ -16,6 +16,8 @@ const mergeSettings = (under, over) => {
 };
 // how long a server still starting is waited for before words are suggested instead
 const WORD_WAIT = 1200;
+// the server capability each textDocument request needs
+const CAPABILITIES = { completion: 'completionProvider', definition: 'definitionProvider', declaration: 'declarationProvider', typeDefinition: 'typeDefinitionProvider', implementation: 'implementationProvider', references: 'referencesProvider', rename: 'renameProvider', formatting: 'documentFormattingProvider', documentSymbol: 'documentSymbolProvider', prepareCallHierarchy: 'callHierarchyProvider', hover: 'hoverProvider', signatureHelp: 'signatureHelpProvider', codeAction: 'codeActionProvider', documentHighlight: 'documentHighlightProvider' };
 
 // Keep the editor independent of hosts and installers. All text mutations use
 // its edit() API, so completion/rename participate in collaboration and undo.
@@ -72,7 +74,7 @@ export function createLanguageWorkbench(api) {
     api.onReset?.();
     for (const c of completers.values()) c.hide();
     for (const s of sessions.values()) clearSession(s);
-    sessions.clear(); attached.clear(); diagnostics.clear();
+    sessions.clear(); attached.clear(); diagnostics.clear(); pathDocs.length = 0;
   }
   function receive(session, message) {
     if (message._sulfur === 'error' || message._sulfur === 'closed') {
@@ -137,43 +139,39 @@ export function createLanguageWorkbench(api) {
       }
     }, PULL_DELAY);
   }
-  async function get(tab) {
-    if (!tab?.rel || !tab.ed?.ready() || tab.info?.readOnly) return null;
-    // a converted extension's server for the file (vsx.<id>), else the catalog's
-    const fileExt = tab.rel.split('.').pop().toLowerCase(), fileName = tab.rel.split('/').pop().toLowerCase();
+  // the servers that could take a file: a converted extension's (vsx.<id>), else the catalog's
+  function serversFor(rel) {
+    const fileExt = rel.split('.').pop().toLowerCase(), fileName = rel.split('/').pop().toLowerCase();
     const custom = (api.convertedServers?.() || []).filter((x) => x.extensions?.includes(fileExt) || x.filenames?.includes(fileName));
     const candidates = [...custom.map((x) => x.id), LANGUAGE_EXTENSIONS[fileExt]].filter(Boolean);
+    return { fileExt, custom, candidates };
+  }
+  // the host's installed servers, asked at most every 30 seconds while it hasn't answered
+  async function loaded(host) {
+    const s = state(host);
+    if (!s.loaded) {
+      if (!s.checking && Date.now() - (s.checkedAt || 0) > 30000) {
+        s.checkedAt = Date.now();
+        s.checking = manage(host).catch(() => null).finally(() => { s.checking = null; });
+      }
+      if (s.checking) await s.checking;
+    }
+    return s.loaded ? s : null;
+  }
+  async function get(tab) {
+    if (!tab?.rel || !tab.ed?.ready() || tab.info?.readOnly) return null;
+    const { fileExt, custom, candidates } = serversFor(tab.rel);
     if (!candidates.length) return null;
     const epoch = generation;
     const context = await api.context(tab);
     if (!context || epoch !== generation) return null;
-    const s = state(context.host);
-    if (!s.loaded) {
-      if (!s.checking && Date.now() - (s.checkedAt || 0) > 30000) {
-        s.checkedAt = Date.now();
-        s.checking = manage(context.host).catch(() => null).finally(() => { s.checking = null; });
-      }
-      if (s.checking) await s.checking;
-      if (!s.loaded) return null;
-    }
+    const s = await loaded(context.host);
+    if (!s) return null;
     const extension = candidates.find((id) => s.extensions.find((x) => x.id === id)?.enabled);
     if (epoch !== generation || !extension) return null;
     const converted = custom.find((x) => x.id === extension);
     const langId = converted ? converted.languageIds?.[fileExt] || converted.languages?.[0] || fileExt : languageId(tab.rel, extension);
-    const key = JSON.stringify([context.host, context.root, extension, context.solutionPath, context.configuration, context.buildDirectory, context.settings]);
-    // Reinitialization is intentional: servers cache active build settings.
-    for (const [old, session] of sessions) if (old !== key && session.extension === extension && session.context.host === context.host && session.context.root === context.root) { clearSession(session); sessions.delete(old); }
-    let session = sessions.get(key);
-    if (!session) {
-      session = { key, context, extension };
-      sessions.set(key, session);
-      session.client = connect(context.host, { op: 'launch', language: extension, root: context.root, configuration: context.configuration, buildDirectory: context.buildDirectory }, (m) => receive(session, m));
-      // a code action's command editing files (workspace/applyEdit), through the editors
-      session.client.applyEdit = (edit) => applyEdit(session, edit);
-      // a converted server's settings: its extension's defaults under the user's own
-      const settings = converted ? { ...context.settings, [extension]: mergeSettings(converted.settings || {}, context.settings?.[extension] || {}) } : context.settings;
-      session.promise = session.client.initialize(serverSettings(extension, { ...context, settings, analyzersEnabled: api.setting?.('sulfur.csharp.analyzersEnabled') })).then(() => { session.readyAt = Date.now(); panel?.paint(); return session; }).catch((e) => { state(context.host).errors[extension] = e.message; panel?.paint(); clearSession(session); return null; });
-    }
+    const session = openSession(context, extension, converted);
     const ready = await session.promise;
     if (!ready || epoch !== generation || session.client.closed() || !api.alive(tab)) return null;
     const uri = `${session.client.rootUri.replace(/\/$/, '')}/${context.documentRel.split('/').map(encodeURIComponent).join('/')}`;
@@ -188,6 +186,62 @@ export function createLanguageWorkbench(api) {
       scheduleAnalysis(tab); scheduleDiagnostics(tab); scheduleWorkspaceAnalysis(session);
     }
     return result;
+  }
+  // the session for a project and server: started once, shared by its files' tabs and by
+  // extensions asking about files by path
+  function openSession(context, extension, converted) {
+    const key = JSON.stringify([context.host, context.root, extension, context.solutionPath, context.configuration, context.buildDirectory, context.settings]);
+    // Reinitialization is intentional: servers cache active build settings.
+    for (const [old, session] of sessions) if (old !== key && session.extension === extension && session.context.host === context.host && session.context.root === context.root) { clearSession(session); sessions.delete(old); }
+    let session = sessions.get(key);
+    if (!session) {
+      session = { key, context, extension };
+      sessions.set(key, session);
+      session.client = connect(context.host, { op: 'launch', language: extension, root: context.root, configuration: context.configuration, buildDirectory: context.buildDirectory }, (m) => receive(session, m));
+      // a code action's command editing files (workspace/applyEdit), through the editors
+      session.client.applyEdit = (edit) => applyEdit(session, edit);
+      // a converted server's settings: its extension's defaults under the user's own
+      const settings = converted ? { ...context.settings, [extension]: mergeSettings(converted.settings || {}, context.settings?.[extension] || {}) } : context.settings;
+      session.promise = session.client.initialize(serverSettings(extension, { ...context, settings, analyzersEnabled: api.setting?.('sulfur.csharp.analyzersEnabled') })).then(() => { session.readyAt = Date.now(); panel?.paint(); return session; }).catch((e) => { state(context.host).errors[extension] = e.message; panel?.paint(); clearSession(session); return null; });
+    }
+    return session;
+  }
+  // a project file asked about by path, as an extension's vscode.execute…Provider commands
+  // do: opened in its server with its tab's text or its disk's, the places in the answer
+  // given as { rel } in the share or { path } outside the project. The last files asked
+  // about stay open for the next question; null when no installed server takes the file.
+  const pathDocs = [];
+  async function fileRequest(rel, method, params = {}) {
+    const { fileExt, custom, candidates } = serversFor(rel);
+    if (!candidates.length || !CAPABILITIES[method]) return null;
+    const context = await api.fileContext?.(rel);
+    if (!context) return null;
+    const s = await loaded(context.host);
+    const extension = s && candidates.find((id) => s.extensions.find((x) => x.id === id)?.enabled);
+    if (!extension) return null;
+    const converted = custom.find((x) => x.id === extension);
+    const session = openSession(context, extension, converted);
+    if (!await session.promise || session.client.closed() || !session.client.capabilities[CAPABILITIES[method]]) return null;
+    const client = session.client;
+    const uri = `${client.rootUri.replace(/\/$/, '')}/${context.documentRel.split('/').map(encodeURIComponent).join('/')}`;
+    if (!client.documents.has(uri)) {
+      const text = await api.readText?.(rel);
+      if (typeof text !== 'string' || client.closed()) return null;
+      if (!client.documents.has(uri)) {
+        client.sync(uri, converted ? converted.languageIds?.[fileExt] || converted.languages?.[0] || fileExt : languageId(rel, extension), text);
+        pathDocs.push({ client, uri });
+        while (pathDocs.length > 64) {
+          const old = pathDocs.shift();
+          if (![...attached.values()].some((d) => d.session.client === old.client && d.uri === old.uri)) old.client.closeDocument(old.uri);
+        }
+      }
+    }
+    const value = await client.request(`textDocument/${method}`, { textDocument: { uri }, ...params });
+    const place = (u) => { try { return { rel: api.join(context.rootRel, relativeUri(client.rootUri, u)) }; } catch { return { path: uriPath(u) }; } };
+    return (Array.isArray(value) ? value : value ? [value] : []).map((x) => (
+      x.targetUri ? { ...x, targetUri: place(x.targetUri) }
+        : x.location?.uri ? { ...x, location: { ...x.location, uri: place(x.location.uri) } }
+          : x.uri ? { ...x, uri: place(x.uri) } : x));
   }
   function changed(tab) {
     const doc = attached.get(tab);
@@ -264,8 +318,7 @@ export function createLanguageWorkbench(api) {
     if (signal?.aborted) return null;
     const doc = await get(tab);
     if (!doc || signal?.aborted) return null;
-    const capability = { completion: 'completionProvider', definition: 'definitionProvider', declaration: 'declarationProvider', typeDefinition: 'typeDefinitionProvider', implementation: 'implementationProvider', references: 'referencesProvider', rename: 'renameProvider', formatting: 'documentFormattingProvider', documentSymbol: 'documentSymbolProvider', prepareCallHierarchy: 'callHierarchyProvider', hover: 'hoverProvider', signatureHelp: 'signatureHelpProvider', codeAction: 'codeActionProvider', documentHighlight: 'documentHighlightProvider' }[method];
-    if (!doc.session.client.capabilities[capability]) return null;
+    if (!doc.session.client.capabilities[CAPABILITIES[method]]) return null;
     const text = tab.ed.text();
     const caret = tab.ed.selection()[0];
     const version = doc.session.client.documents.get(doc.uri).version;
@@ -866,5 +919,5 @@ export function createLanguageWorkbench(api) {
     id: `sulfur.language.${x.id}`, native: true, active: !!x.enabled,
     manifest: { name: x.id, displayName: `${x.name} (${host})`, contributes: { languageServers: [{ extensions: Object.entries(LANGUAGE_EXTENSIONS).filter(([, id]) => id === x.id).map(([ext]) => ext) }] } },
   }));
-  return { manage, installedExtensions, serverState: (host, id) => state(host).extensions.find((x) => x.id === id) || null, serverError: (host, id) => state(host).errors[id] || '', hover, signatureHelp, signatureTriggers, signature, quickFix, hasCodeActions, documentOutline, workspaceSymbols, openWorkspaceSymbol, callHierarchy, hierarchyCalls, openLocation, mount, filter, format, attach, changed, navigate, rename, reset, get, request, suggest, complete: suggest, cancelCompletions: () => { for (const c of completers.values()) c.hide(); api.onSuggest?.(); }, suggesting, dismissSuggest, symbols, preferLanguage, problems: () => [...diagnostics.values()].flatMap((d) => d.items.map((item) => ({ ...item, context: d.session.context }))), saved(tab) { const d = attached.get(tab); if (d) { changed(tab); const save = d.session.client.capabilities.textDocumentSync?.save; if (save) d.session.client.notify('textDocument/didSave', { textDocument: { uri: d.uri }, ...(save.includeText ? { text: tab.ed.text() } : {}) }); } } };
+  return { manage, installedExtensions, serverState: (host, id) => state(host).extensions.find((x) => x.id === id) || null, serverError: (host, id) => state(host).errors[id] || '', hover, signatureHelp, signatureTriggers, signature, quickFix, hasCodeActions, documentOutline, workspaceSymbols, openWorkspaceSymbol, callHierarchy, hierarchyCalls, openLocation, mount, filter, format, attach, changed, navigate, rename, reset, get, request, fileRequest, suggest, complete: suggest, cancelCompletions: () => { for (const c of completers.values()) c.hide(); api.onSuggest?.(); }, suggesting, dismissSuggest, symbols, preferLanguage, problems: () => [...diagnostics.values()].flatMap((d) => d.items.map((item) => ({ ...item, context: d.session.context }))), saved(tab) { const d = attached.get(tab); if (d) { changed(tab); const save = d.session.client.capabilities.textDocumentSync?.save; if (save) d.session.client.notify('textDocument/didSave', { textDocument: { uri: d.uri }, ...(save.includeText ? { text: tab.ed.text() } : {}) }); } } };
 }

@@ -96,6 +96,35 @@ test('a custom editor resolves into the workbench\'s webview, its own files as r
   await assert.rejects(shim.resolveCustomEditor({ viewType: 'other', path: '/x', wid: 'ce2' }), /no custom editor/);
 });
 
+test('the editor\'s language features answer from Sulfur\'s servers, as VS Code objects at the extension\'s own paths', async () => {
+  const range = (a, b, c, d) => ({ start: { line: a, character: b }, end: { line: c, character: d } });
+  const answers = {
+    'languages.request': (method, rel, params) => {
+      if (method === 'documentSymbol') return [{ name: 'Graph', kind: 5, range: range(0, 0, 9, 1), selectionRange: range(0, 6, 0, 11), children: [{ name: 'draw', kind: 6, range: range(2, 2, 4, 3), selectionRange: range(2, 2, 2, 6) }] }];
+      if (method === 'definition') return [{ targetUri: { rel: 'src/b.ts' }, targetRange: range(3, 0, 5, 1), targetSelectionRange: range(3, 9, 3, 13) }];
+      return [{ uri: { rel: 'src/a.ts' }, range: range(params.position.line, 0, params.position.line, 4) }, { uri: { path: '/C:/lib/x.d.ts' }, range: range(0, 0, 0, 1) }];
+    },
+  };
+  const { vscode, calls } = harness(answers, { nativeHomeRoot: 'C:\\Users', nativeWorkspace: 'C:\\Projects\\demo', workspace: 'Projects/demo' });
+  const repo = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  assert.equal(repo, 'C:\\Projects\\demo');
+  const file = vscode.Uri.file(`${repo}\\src\\a.ts`);
+  const [graph] = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', file);
+  assert.deepEqual(calls.at(-1), ['languages.request', 'documentSymbol', 'src/a.ts', {}]);
+  assert.equal(graph.kind, vscode.SymbolKind.Class);
+  assert.equal(graph.children[0].kind, vscode.SymbolKind.Method);
+  assert.ok(graph.range.contains(new vscode.Position(4, 2)) && !graph.children[0].range.contains(new vscode.Position(5, 0)));
+  const [link] = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', file, new vscode.Position(1, 4));
+  assert.equal(link.targetUri.fsPath, 'C:\\Projects\\demo\\src\\b.ts');
+  assert.equal(link.targetSelectionRange.start.character, 9);
+  const refs = await vscode.commands.executeCommand('vscode.executeReferenceProvider', file, new vscode.Position(7, 1));
+  assert.deepEqual(calls.at(-1), ['languages.request', 'references', 'src/a.ts', { position: { line: 7, character: 1 } }]);
+  assert.ok(refs[0] instanceof vscode.Location);
+  assert.equal(refs[0].uri.toString(), file.toString());
+  assert.equal(refs[1].uri.fsPath, 'C:\\lib\\x.d.ts');
+  assert.deepEqual(await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', vscode.Uri.file('C:\\elsewhere\\c.ts')), []);
+});
+
 test('webview panels, commands and terminals reach Sulfur\'s; what\'s missing is said once', async () => {
   const { vscode, calls, registered } = harness();
   const panel = vscode.window.createWebviewPanel('demo.panel', 'Demo', vscode.ViewColumn.One, { enableScripts: true });

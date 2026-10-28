@@ -381,6 +381,20 @@ function keyLabel(k) {
 
 let I = null;
 
+// what a language server is started with for a file of project: its folders on host,
+// the build it's configured for, and the user's server settings
+function serverContext(host, share, loc, rel, project, workspace) {
+  const cfg = buildCfg();
+  const rootRel = project.dir;
+  const root = hostPath(host, share, rootRel);
+  const path = hostPath(host, share, rel);
+  if (!root || !path) return null;
+  const buildRoot = cfg?.host === host && cfg.toolchain ? tasksFor(cfg, project).buildRoot : '';
+  const buildDirectory = buildRoot ? absolutePath(buildRoot) ? buildRoot : hostPath(host, share, joinPath(rootRel, buildRoot)) : '';
+  const solutionPath = project.sln?.[0] ? hostPath(host, share, filesJoin(rootRel, project.sln[0])) : '';
+  return { host, root, rootRel, path, solutionPath, documentRel: rel.slice(rootRel ? rootRel.length + 1 : 0), loc, workspace, configuration: cfg?.configuration || '', buildDirectory, settings: setting('sulfur.languageServerSettings') || {} };
+}
+
 const languages = createLanguageWorkbench({
   el, join: filesJoin, log, pick, input: inputBox,
   setting,
@@ -404,17 +418,21 @@ const languages = createLanguageWorkbench({
     const workspace = wsKey();
     const project = await detectProject();
     if (I !== current || I.active !== t || wsKey() !== workspace || !project) return null;
-    const cfg = buildCfg();
-    const share = t.share ?? 'home';
-    const rootRel = project.dir;
-    const root = hostPath(t.host, share, rootRel);
-    const path = hostPath(t.host, share, t.rel);
-    if (!root || !path) return null;
-    const buildRoot = cfg?.host === t.host && cfg.toolchain ? tasksFor(cfg, project).buildRoot : '';
-    const buildDirectory = buildRoot ? absolutePath(buildRoot) ? buildRoot : hostPath(t.host, share, joinPath(rootRel, buildRoot)) : '';
-    const solutionPath = project.sln?.[0] ? hostPath(t.host, share, filesJoin(rootRel, project.sln[0])) : '';
-    return { host: t.host, root, rootRel, path, solutionPath, documentRel: t.rel.slice(rootRel ? rootRel.length + 1 : 0), loc: t.loc, workspace, configuration: cfg?.configuration || '', buildDirectory, settings: setting('sulfur.languageServerSettings') || {} };
+    return serverContext(t.host, t.share ?? 'home', t.loc, t.rel, project, workspace);
   },
+  // a workspace file no tab need hold, as an extension asks about it: the current project's
+  // when it's in it, so it shares that project's servers with its tabs
+  async fileContext(rel) {
+    if (!I || !under(rel, I.st.root)) return null;
+    const current = I, workspace = wsKey(), where = gitWhere();
+    // read once for a run of questions, as an indexing extension asks file after file
+    const dir = under(rel, projDir()) ? projDir() : I.st.root, key = `${workspace}\n${dir}`;
+    if (I.fileProject?.key !== key || Date.now() - I.fileProject.at > 10000) I.fileProject = { key, at: Date.now(), project: projectAt(dir) };
+    const project = await I.fileProject.project;
+    if (I !== current || wsKey() !== workspace || !where) return null;
+    return serverContext(where.host, isHomeLoc() ? 'home' : locOf().share, locOf(), rel, project, workspace);
+  },
+  readText: (rel) => (I ? readAt(rel, locOf()) : null),
   open(path, context, range) {
     if (!I || context.workspace !== wsKey()) return null;
     return openFile(path, { host: context.host, loc: context.loc, preview: false, line: range.start.line + 1, col: range.start.character + 1 });
@@ -3795,6 +3813,7 @@ function registerCommands() {
   C('sulfur.extensions.guide', 'Open the Extension Guide', () => openGuide(), { category: 'Extensions' });
   C('sulfur.extensions.create', 'Create New Extension…', () => createExtension(), { category: 'Extensions' });
   C('sulfur.extensions.openVSX', 'Browse Open VSX…', () => openVsxLibrary(), { category: 'Extensions' });
+  C('workbench.extensions.installExtension', 'Install Extension by Id', (id) => installExtensionById(id), { category: 'Extensions', hidden: true });
   C('workbench.action.reopenWithEditor', 'Reopen Editor With…', () => reopenWith(), { category: 'View', when: () => !!(I.active?.rel || I.active?.customOf) });
   C('workbench.extensions.action.refreshExtension', 'Reload Extensions', () => loadExtensions(true), { category: 'Developer' });
   C('workbench.action.reloadWindow', 'Reload Window', () => { const w = I.w; const open = { dir: I.st.root }; teardown(); ideStart(w, open); }, { category: 'Developer' });
@@ -8867,8 +8886,47 @@ const extChannel = (x, n) => (n ? `${extName(x)}: ${n}` : `Extension: ${extName(
 function nativeExtensions() { return [...NATIVE_EXTENSIONS, ...languages.installedExtensions(runHost())]; }
 function extensionRegistry() {
   return [...nativeExtensions().map((x) => ({ id: x.id, isActive: x.active, native: true, packageJSON: x.manifest })),
+    ...standIns().map((s) => ({ id: s.id, isActive: true, native: true, packageJSON: { name: s.id.split('.').pop(), displayName: `${s.id} (Sulfur's ${s.languages.join(', ')} server)` } })),
     ...[...I.exts.values()].filter((x) => !x.bad).map((x) => ({ id: x.manifest?.sulfur?.vscode?.id || x.id, extensionPath: `/${x.dir}${x.manifest?.sulfur?.vscode?.root ? '/' + x.manifest.sulfur.vscode.root : ''}`,
       packageJSON: x.manifest, isActive: x.state === 'on' }))];
+}
+
+// the VS Code language extensions installed extensions ask for, as their conversion found
+// them, and the native servers that stand in for each
+function editorServers() {
+  const map = new Map();
+  for (const x of I.exts.values()) for (const [id, langs] of Object.entries(x.manifest?.sulfur?.vscode?.editors || {})) {
+    if (Array.isArray(langs)) map.set(id.toLowerCase(), { id, languages: langs.map(String) });
+  }
+  return map;
+}
+// those whose server is installed and enabled where the workspace's servers run: an
+// extension finds them installed, as it would the VS Code extension
+const serverHost = () => gitWhere()?.host || runHost();
+function standIns() {
+  const host = serverHost();
+  if (!host) return [];
+  return [...editorServers().values()].filter((s) => s.languages.some((l) => { const st = languages.serverState(host, l); return st?.installed && st.enabled; }));
+}
+// VS Code's install command, as an extension asks for one it depends on: a language
+// extension Sulfur stands in for installs its native servers; anything else comes from Open VSX
+async function installExtensionById(arg) {
+  const id = String(arg?.id || arg || '').trim();
+  const standIn = editorServers().get(id.toLowerCase());
+  if (standIn) {
+    const host = serverHost();
+    if (!host) throw new Error(`no machine to install the ${standIn.languages.join(', ')} server on`);
+    for (const lang of standIn.languages) {
+      const st = languages.serverState(host, lang);
+      if (st?.installed && st.enabled) continue;
+      await languages.manage(host, st?.installed ? 'enable' : 'install', lang);
+    }
+    refreshExtensionRegistry();
+    return;
+  }
+  const dot = id.indexOf('.');
+  if (dot <= 0 || dot === id.length - 1) throw new Error(`'${id}' is not an extension id (publisher.name)`);
+  await vsxInstall({ namespace: id.slice(0, dot), name: id.slice(dot + 1), displayName: id });
 }
 
 function refreshExtensionRegistry() {
@@ -8900,6 +8958,29 @@ function claimExtensionHandler(x, kind, id) {
 }
 function releaseExtensionHandler(x, kind, id) { const key = `${kind}:${id}`; if (I.extensionHandlers?.get(key) === x) I.extensionHandlers.delete(key); }
 
+// an image of an installed extension's as a url the page can show, its bytes typed by name
+const extImages = new Map();
+function extImageUrl(rel) {
+  if (!extImages.has(rel)) extImages.set(rel, (async () => {
+    try {
+      const r = await fetch(filesApi(HOME, 'download', { path: rel }));
+      if (!r.ok) return null;
+      const kind = rel.split('.').pop().toLowerCase();
+      return URL.createObjectURL(new Blob([await r.arrayBuffer()], { type: kind === 'svg' ? 'image/svg+xml' : `image/${kind === 'jpg' ? 'jpeg' : kind}` }));
+    } catch { return null; }
+  })());
+  return extImages.get(rel);
+}
+// an extension's own icon (a converted package's, beside its manifest), else the generic one
+function extIcon(x) {
+  const rel = x.manifest?.icon && cleanPath(filesJoin(x.dir, x.manifest.icon));
+  if (!rel || !under(rel, x.dir)) return icon('ext');
+  const img = Object.assign(el('img', 'ide-ext-img'), { alt: '', draggable: false });
+  const generic = icon('ext');
+  extImageUrl(rel).then((url) => { if (url) { img.src = url; generic.replaceWith(img); } });
+  return generic;
+}
+
 // Extension views share native sidebar containers and retain their frames while hidden.
 function extensionSideView(x, viewId) {
   x.sideViews ||= new Map();
@@ -8915,6 +8996,14 @@ function extensionSideView(x, viewId) {
     const b = Object.assign(el('button', 'ide-act'), { type: 'button', title, ariaLabel: title });
     b.setAttribute('role', 'tab'); b.dataset.label = title;
     b.append(icon('ext')); b.addEventListener('click', () => showSide(id, I.st.side.view !== id || I.st.side.hidden, true));
+    // the container's own icon, drawn in the bar's color as VS Code draws it
+    const iconRel = declared.containerIcon && cleanPath(filesJoin(x.dir, declared.containerIcon));
+    if (iconRel && under(iconRel, x.dir)) extImageUrl(iconRel).then((url) => {
+      if (!url) return;
+      const mark = el('span', 'ide-ic ide-act-mask');
+      mark.style.maskImage = mark.style.webkitMaskImage = `url("${url}")`;
+      b.replaceChildren(mark);
+    });
     I.actTop.append(b); I.actBtns.set(id, b);
     container = { id, title, body, acts: [], entries: new Set(),
       onShow() { for (const entry of this.entries) entry.onShow?.(); },
@@ -9050,7 +9139,7 @@ function paintExtView() {
     const row = Object.assign(el('div', `ide-ext${x.state === 'on' ? '' : ' off'}`), { tabIndex: 0 });
     row.setAttribute('role', 'listitem');
     const ic = el('span', 'ide-ext-ic');
-    ic.append(icon('ext'));
+    ic.append(extIcon(x));
     const main = el('div', 'ide-ext-main');
     const top = el('div', 'ide-ext-top');
     top.append(el('span', 'ide-ext-name', extName(x)), el('span', 'ide-ext-ver', x.manifest?.version ? `v${x.manifest.version}` : ''));
@@ -9247,6 +9336,11 @@ async function activateExt(x) {
     let packageJSON = {};
     try { packageJSON = parseJsonc((await readUser(`${x.dir}/${vs.root}/package.json`)) || '{}') || {}; } catch {}
     if (!active()) return;
+    // the language servers it asks for, known before it looks for their VS Code extensions
+    if (vs.editors && serverHost() && !Object.values(vs.editors).flat().some((l) => languages.serverState(serverHost(), l))) {
+      await languages.manage(serverHost()).catch(() => {});
+      if (!active()) return;
+    }
     vscode = { root: vs.root, id: vs.id, defaults: vs.defaults || {}, packageJSON, extensions: extensionRegistry(), state: { global: extState(x, 'global'), workspace: extState(x, 'workspace') }, dark: getComputedStyle(I.w.node).colorScheme !== 'light' };
   }
   if (vs?.runtime === 'bun') {
@@ -9383,6 +9477,7 @@ const EXT_CALLS = {
   'extensions.activate': async (x, id) => {
     const target = [...I.exts.values()].find((e) => (e.manifest?.sulfur?.vscode?.id || e.id).toLowerCase() === String(id).toLowerCase());
     if (!target) {
+      if (standIns().some((s) => s.id.toLowerCase() === String(id).toLowerCase())) return true;
       const native = nativeExtensions().find((e) => e.id.toLowerCase() === String(id).toLowerCase());
       if (native?.active) return true;
       throw new Error(native ? `Extension '${id}' is disabled; enable it in Extensions` : `Extension '${id}' is not installed`);
@@ -9444,6 +9539,19 @@ const EXT_CALLS = {
   'output.append': (x, n, text) => outAppend(extChannel(x, n), text),
   'output.clear': (x, n) => { const c = I.output.get(extChannel(x, n)); if (c) c.lines = []; paintOutput(false); },
   'output.show': (x, n) => { I.outCh = extChannel(x, n); if (!I.output.has(I.outCh)) outAppend(I.outCh, ''); paintOutputChannels(); showPanel('output', true); },
+  // VS Code's vscode.execute…Provider commands, answered by Sulfur's language servers: a
+  // workspace file's symbols, or the places a position's name is defined or used
+  'languages.request': async (x, method, file, params) => {
+    if (!['documentSymbol', 'definition', 'declaration', 'typeDefinition', 'implementation', 'references'].includes(method)) throw new Error(`no language request ${method}`);
+    const rel = cleanPath(filesJoin(I.st.root, String(file || '')));
+    if (rel === null || !under(rel, I.st.root) || rel === I.st.root) throw new Error(`${file} is outside the workspace`);
+    const position = params?.position && { line: Number(params.position.line) || 0, character: Number(params.position.character) || 0 };
+    const extra = method === 'documentSymbol' ? {} : { position, ...(method === 'references' ? { context: { includeDeclaration: true } } : {}) };
+    const list = await languages.fileRequest(rel, method, extra);
+    if (!list) return null;
+    const out = (p) => (p.rel !== undefined ? { rel: wsRel(p.rel) } : p);
+    return list.map((v) => (v.targetUri ? { ...v, targetUri: out(v.targetUri) } : v.location?.uri ? { ...v, location: { ...v.location, uri: out(v.location.uri) } } : v.uri ? { ...v, uri: out(v.uri) } : v));
+  },
   'workspace.root': () => I.st.root,
   'workspace.read': async (x, p) => {
     const { path, loc } = extPath(p);
@@ -9840,7 +9948,7 @@ async function paintExtPage(t, x) {
   const m = x.manifest || {};
   const head = el('div', 'ide-extp-head');
   const ic = el('div', 'ide-extp-ic');
-  ic.append(icon('ext'));
+  ic.append(extIcon(x));
   const info = el('div', 'ide-extp-info');
   const from = m.sulfur?.converted;
   info.append(el('h1', '', extName(x)), el('div', 'ide-extp-id', `${x.id}${m.version ? ` · v${m.version}` : ''} · ${x.dir}${from ? ` · converted from ${from.namespace}.${from.name} on Open VSX${from.targetPlatform && from.targetPlatform !== 'universal' ? ` (${from.targetPlatform})` : ''}` : ''}`), el('p', '', x.bad || m.description || ''));

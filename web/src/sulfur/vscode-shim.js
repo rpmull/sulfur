@@ -66,6 +66,9 @@ export function vscodeShim(api, host) {
     get fsPath() {
       if (!context.nativeHomeRoot) return this.path;
       const native = (p) => /^[a-z]:/i.test(context.nativeHomeRoot) ? p.replace(/\//g, '\\') : p;
+      // the workspace where the service found it, which needn't be in the home
+      const ws = normal(`/${context.workspace || ''}`);
+      if (context.nativeWorkspace && (this.path === ws || this.path.startsWith(`${ws}/`))) return native(context.nativeWorkspace.replace(/[\\/]+$/, '') + this.path.slice(ws.length));
       if (/^\/[a-z]:\//i.test(this.path)) return native(this.path.slice(1));
       if (this.path === `/${context.user}` || this.path.startsWith(`/${context.user}/`) || this.path.startsWith('/shared/')) return native(context.nativeHomeRoot.replace(/[\\/]+$/, '') + this.path);
       return native(this.path);
@@ -86,13 +89,29 @@ export function vscodeShim(api, host) {
     translate(dl = 0, dc = 0) { return new Position(this.line + (typeof dl === 'object' ? dl.lineDelta || 0 : dl), this.character + (typeof dl === 'object' ? dl.characterDelta || 0 : dc)); }
     with(line = this.line, character = this.character) { return new Position(line, character); }
     isBefore(o) { return this.line < o.line || (this.line === o.line && this.character < o.character); }
+    isBeforeOrEqual(o) { return !o.isBefore(this); }
+    isAfter(o) { return o.isBefore(this); }
+    isAfterOrEqual(o) { return !this.isBefore(o); }
     isEqual(o) { return this.line === o.line && this.character === o.character; }
+    compareTo(o) { return this.isBefore(o) ? -1 : this.isEqual(o) ? 0 : 1; }
   }
   class Range {
     constructor(a, b, c, d) {
       if (typeof a === 'number') { this.start = new Position(a, b); this.end = new Position(c, d); } else { this.start = a; this.end = b; }
     }
     get isEmpty() { return this.start.isEqual(this.end); }
+    get isSingleLine() { return this.start.line === this.end.line; }
+    contains(o) { return o instanceof Range ? this.contains(o.start) && this.contains(o.end) : !o.isBefore(this.start) && !this.end.isBefore(o); }
+    isEqual(o) { return this.start.isEqual(o.start) && this.end.isEqual(o.end); }
+  }
+  // a language server's range (and symbols, places) as VS Code's own objects
+  const rangeOf = (r) => new Range(r.start.line, r.start.character, r.end.line, r.end.character);
+  class Location { constructor(uri, range) { this.uri = uri; this.range = range instanceof Position ? new Range(range, range) : range; } }
+  class DocumentSymbol {
+    constructor(name, detail, kind, range, selectionRange) { Object.assign(this, { name, detail, kind, range, selectionRange, children: [] }); }
+  }
+  class SymbolInformation {
+    constructor(name, kind, containerName, location) { Object.assign(this, { name, kind, containerName, location }); }
   }
   class Selection extends Range {
     constructor(a, b, c, d) { super(a, b, c, d); this.anchor = this.start; this.active = this.end; }
@@ -427,6 +446,43 @@ export function vscodeShim(api, host) {
     onDidGrantWorkspaceTrust: noEvent,
   });
 
+  // --- language features: the workspace's files answered by Sulfur's language servers -----------------
+  const PROVIDERS = {
+    'vscode.executeDocumentSymbolProvider': 'documentSymbol', 'vscode.executeDefinitionProvider': 'definition',
+    'vscode.executeDeclarationProvider': 'declaration', 'vscode.executeTypeDefinitionProvider': 'typeDefinition',
+    'vscode.executeImplementationProvider': 'implementation', 'vscode.executeReferenceProvider': 'references',
+  };
+  const nativeWorkspace = () => (context.nativeWorkspace ? Uri.file(context.nativeWorkspace).path : null);
+  // an extension's uri as a path in the workspace, made from its folder's uri or its fsPath
+  function workspaceRel(u) {
+    const p = pathOf(u);
+    for (const base of [workspaceUri.path, nativeWorkspace()].filter(Boolean)) {
+      const fold = /^\/[a-z]:/i.test(base) ? (s) => s.toLowerCase() : (s) => s;
+      if (fold(p).startsWith(`${fold(base)}/`)) return p.slice(base.length + 1);
+    }
+    return null;
+  }
+  // a place in the answer: a workspace path as the extension names its files, or one outside
+  const placeUri = (p) => (p?.rel !== undefined ? (nativeWorkspace() ? Uri.file(`${nativeWorkspace()}/${p.rel}`) : Uri.joinPath(workspaceUri, p.rel)) : Uri.file(p?.path || '/'));
+  // LSP numbers symbol kinds from 1, VS Code from 0
+  const symbolOf = (s) => {
+    const kind = Math.max(0, (Number(s.kind) || 1) - 1);
+    if (s.location) return new SymbolInformation(String(s.name), kind, s.containerName || '', new Location(placeUri(s.location.uri), rangeOf(s.location.range)));
+    const d = new DocumentSymbol(String(s.name), s.detail || '', kind, rangeOf(s.range), rangeOf(s.selectionRange || s.range));
+    if (s.tags) d.tags = s.tags;
+    d.children = (s.children || []).map(symbolOf);
+    return d;
+  };
+  const placeOf = (x) => (x.targetUri
+    ? { targetUri: placeUri(x.targetUri), targetRange: rangeOf(x.targetRange), targetSelectionRange: rangeOf(x.targetSelectionRange || x.targetRange), originSelectionRange: x.originSelectionRange && rangeOf(x.originSelectionRange) }
+    : new Location(placeUri(x.uri), rangeOf(x.range)));
+  async function languageRequest(method, u, position) {
+    const rel = workspaceRel(u);
+    if (rel === null) return [];
+    const list = await call('languages.request', method, rel, position ? { position: { line: position.line, character: position.character } } : {});
+    return (list || []).map(method === 'documentSymbol' ? symbolOf : placeOf);
+  }
+
   // --- commands -----------------------------------------------------------------------------------------
   const commandHandlers = new Map();
   const commands = ns('commands', {
@@ -438,6 +494,7 @@ export function vscodeShim(api, host) {
     registerTextEditorCommand: (id, fn, thisArg) => commands.registerCommand(id, (...a) => fn.apply(thisArg, [undefined, undefined, ...a])),
     executeCommand: async (id, ...args) => {
       if (commandHandlers.has(id)) return commandHandlers.get(id)(...args);
+      if (PROVIDERS[id]) return languageRequest(PROVIDERS[id], args[0], args[1]);
       switch (id) {
         case 'vscode.open': return api.workspace.openFile(pathOf(args[0]));
         case 'vscode.openWith': return call('customEditor.open', pathOf(args[0]), String(args[1] || ''));
@@ -509,7 +566,7 @@ export function vscodeShim(api, host) {
     version: '1.95.0',
     Uri, EventEmitter, Disposable, Position, Range, Selection, ThemeColor, ThemeIcon, MarkdownString, TreeItem, CancellationTokenSource,
     RelativePattern, FileSystemError, Diagnostic, SnippetString, TextEdit, WorkspaceEdit,
-    Location: class { constructor(uri, range) { this.uri = uri; this.range = range; } },
+    Location, DocumentSymbol, SymbolInformation,
     ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
     StatusBarAlignment: { Left: 1, Right: 2 },
     ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },

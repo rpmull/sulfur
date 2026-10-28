@@ -118,6 +118,7 @@ pub async fn start(ws: &Ws, text: &str, files: &Arc<Files>, bundle: Option<&[u8]
     message["context"]["nativeHomeRoot"] = json!(files.share("home")?.root);
     message["context"]["nativeEntry"] = json!(main);
     message["context"]["nativeExtensionRoot"] = json!(real);
+    message["context"]["nativeWorkspace"] = json!(workspace);
     ext.send(&message.to_string()).await;
     let stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");
