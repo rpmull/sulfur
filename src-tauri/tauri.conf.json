@@ -5,26 +5,24 @@
   "identifier": "dev.phosphorus.sulfur",
   "build": {
     "beforeDevCommand": "bun run build:web",
-    "beforeBuildCommand": "bun run build:web && bun run build:sidecar",
-    "frontendDist": "http://127.0.0.1:47615/sulfur/",
-    "devUrl": "http://127.0.0.1:47615/sulfur/"
+    "beforeBuildCommand": "bun run build:web",
+    "frontendDist": "http://127.0.0.1:47615/sulfur/"
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [],
     "security": {
       "csp": null,
-      "capabilities": ["main"]
+      "capabilities": [
+        "main"
+      ]
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": false,
-    "externalBin": ["binaries/sulfur-service"],
     "resources": {
-      "resources/dist/": "resources/dist/",
-      "resources/lsp-ipc.cjs": "resources/lsp-ipc.cjs",
       "../LICENSE": "LICENSE",
       "../THIRD_PARTY_LICENSES.txt": "THIRD_PARTY_LICENSES.txt"
     },
@@ -36,14 +34,18 @@
     "shortDescription": "A mesh-capable code editor",
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
       }
     },
     "windows": {
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,
-        "installerHooks": "nsis-hooks.nsh"
+        "installerHooks": "nsis-hooks.nsh",
+        "installerIcon": "../packaging/sulfur/icons/icon.ico"
       }
     },
     "publisher": "Phosphorus",

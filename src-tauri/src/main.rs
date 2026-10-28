@@ -1,27 +1,31 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// Sulfur's desktop app: the system's web view around the page its own service
+// serves, the service running inside this same process. Run with -headless it
+// serves alone (for a browser or a test); `sulfur sulfur-language` and
+// `sulfur sulfur-sqlite` are the mesh host helpers a Phosphorus host calls.
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex,
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
 };
+use sulfur_service::{Options, Service, StartError};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_shell::{
-    process::{CommandChild, CommandEvent},
-    ShellExt,
-};
 use tauri_plugin_updater::UpdaterExt;
 
-struct Service(Mutex<Option<CommandChild>>);
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+struct Running(Mutex<Option<Service>>);
 static READY: AtomicBool = AtomicBool::new(false);
 
+/// every open file saved and every shell ended before the process goes
 fn stop_service(app: &tauri::AppHandle) {
-    let child = app.state::<Service>().0.lock().unwrap().take();
-    if let Some(mut child) = child {
-        // Give the JS host time to close PTYs and flush/stop its child services.
-        let _ = child.write(b"shutdown\n");
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let _ = child.kill();
+    let service = app.state::<Running>().0.lock().unwrap().take();
+    if let Some(service) = service {
+        tauri::async_runtime::block_on(service.stop());
     }
 }
 
@@ -39,6 +43,18 @@ fn finish_close(window: tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+/// the release key as Tauri's updater takes it, whichever way it was given
+fn update_key(key: &str) -> String {
+    let key = key.trim();
+    if key.starts_with("untrusted comment:") {
+        BASE64.encode(key)
+    } else if BASE64.decode(key).is_ok_and(|bytes| bytes.len() == 42) {
+        BASE64.encode(format!("untrusted comment: Sulfur update key\n{key}\n"))
+    } else {
+        key.to_owned()
+    }
+}
+
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle, file: String) -> Result<(), String> {
     if file != "tauri-updater" {
@@ -49,10 +65,7 @@ async fn install_update(app: tauri::AppHandle, file: String) -> Result<(), Strin
     if feed.is_empty() || key.is_empty() {
         return Err("No signed update feed in this build".into());
     }
-    let endpoint = format!(
-        "{}/sulfur-{{{{target}}}}-{{{{arch}}}}.json",
-        feed.trim_end_matches('/')
-    );
+    let endpoint = format!("{}/sulfur-{{{{target}}}}-{{{{arch}}}}.json", feed.trim_end_matches('/'));
     let updater = app
         .updater_builder()
         .on_before_exit({
@@ -62,34 +75,13 @@ async fn install_update(app: tauri::AppHandle, file: String) -> Result<(), Strin
                 stop_service(&app);
             }
         })
-        .pubkey(if key.trim().starts_with("untrusted comment:") {
-            BASE64.encode(key.trim())
-        } else if BASE64
-            .decode(key.trim())
-            .is_ok_and(|bytes| bytes.len() == 42)
-        {
-            BASE64.encode(format!(
-                "untrusted comment: Sulfur update key\n{}\n",
-                key.trim()
-            ))
-        } else {
-            key.trim().to_owned()
-        })
-        .endpoints(vec![endpoint
-            .parse::<tauri::Url>()
-            .map_err(|e| e.to_string())?])
+        .pubkey(update_key(key))
+        .endpoints(vec![endpoint.parse::<tauri::Url>().map_err(|e| e.to_string())?])
         .map_err(|e| e.to_string())?
         .build()
         .map_err(|e| e.to_string())?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or("No newer update")?;
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|e| e.to_string())
+    let update = updater.check().await.map_err(|e| e.to_string())?.ok_or("No newer update")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())
 }
 
 fn open_window(app: &tauri::AppHandle, origin: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -98,43 +90,36 @@ fn open_window(app: &tauri::AppHandle, origin: &str) -> Result<(), Box<dyn std::
     }
     let origin_url: tauri::Url = origin.parse()?;
     // only the hosts capabilities/main.json grants: a capability URL pattern can't name [::1]
-    if origin_url.scheme() != "http"
-        || !matches!(origin_url.host_str(), Some("127.0.0.1" | "localhost"))
-    {
+    if origin_url.scheme() != "http" || !matches!(origin_url.host_str(), Some("127.0.0.1" | "localhost")) {
         return Err("The service must use loopback HTTP on 127.0.0.1 or localhost".into());
     }
     let allowed = origin_url.origin().ascii_serialization();
     let script = include_str!("bridge.js").replace("http://127.0.0.1:47615", &allowed);
-    let builder = WebviewWindowBuilder::new(
-        app,
-        "main",
-        WebviewUrl::External(format!("{allowed}/sulfur/").parse()?),
-    )
-    .title("Sulfur")
-    .inner_size(1320.0, 860.0)
-    .min_inner_size(640.0, 420.0)
-    .decorations(cfg!(target_os = "macos"))
-    .visible(false)
-    .initialization_script(script)
-    .on_navigation(move |url| url.origin().ascii_serialization() == allowed);
+    let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(format!("{allowed}/sulfur/").parse()?))
+        .title("Sulfur")
+        .inner_size(1320.0, 860.0)
+        .min_inner_size(640.0, 420.0)
+        .decorations(cfg!(target_os = "macos"))
+        .visible(false)
+        .background_color(tauri::window::Color(30, 30, 30, 255))
+        .initialization_script(script)
+        .on_navigation(move |url| url.origin().ascii_serialization() == allowed);
     #[cfg(target_os = "windows")]
     let builder = builder.data_directory(
         std::env::var_os("LOCALAPPDATA")
-            .map(std::path::PathBuf::from)
+            .map(PathBuf::from)
             .unwrap_or(std::env::temp_dir())
             .join("dev.phosphorus.sulfur/EBWebView"),
     );
     #[cfg(target_os = "linux")]
     let builder = builder.data_directory(
         std::env::var_os("XDG_DATA_HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                    .join(".local/share")
-            })
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"))
             .join("dev.phosphorus.sulfur"),
     );
     builder.build()?;
+    // the window shown even if the page never says it's ready
     let handle = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(8));
@@ -145,75 +130,79 @@ fn open_window(app: &tauri::AppHandle, origin: &str) -> Result<(), Box<dyn std::
     Ok(())
 }
 
-fn main() {
-    // Keep the old executable's SSH helper commands usable without opening a
-    // window or entering the single-instance desktop plugin.
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args
-        .first()
-        .is_some_and(|arg| arg == "sulfur-language" || arg == "sulfur-sqlite")
-        || args.iter().any(|arg| {
-            matches!(
-                arg.to_str(),
-                Some("-headless" | "--headless" | "-headless=true" | "--headless=true")
-            )
-        })
-    {
-        let result = (|| -> Result<i32, Box<dyn std::error::Error>> {
-            let exe = std::env::current_exe()?;
-            let directory = exe.parent().ok_or("No executable directory")?;
-            let service = directory.join(if cfg!(windows) {
-                "sulfur-service.exe"
-            } else {
-                "sulfur-service"
-            });
-            let bridge = if cfg!(target_os = "macos") {
-                directory.join("../Resources/resources/lsp-ipc.cjs")
-            } else if cfg!(target_os = "linux") {
-                directory.join("../lib/sulfur/resources/lsp-ipc.cjs")
-            } else {
-                directory.join("resources/lsp-ipc.cjs")
-            };
-            let status = std::process::Command::new(service)
-                .args(&args)
-                .args([
-                    std::ffi::OsStr::new("--dist"),
-                    bridge
-                        .parent()
-                        .ok_or("No resource directory")?
-                        .join("dist")
-                        .as_os_str(),
-                ])
-                .env("SULFUR_IPC_BRIDGE", &bridge)
-                .status()?;
-            Ok(status.code().unwrap_or(1))
-        })();
-        match result {
-            Ok(code) => std::process::exit(code),
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(1);
+/// an option's value, as -name value, --name value or --name=value
+fn option(args: &[String], name: &str) -> Option<String> {
+    for (i, a) in args.iter().enumerate() {
+        let bare = a.trim_start_matches('-');
+        if a.starts_with('-') && bare == name {
+            return args.get(i + 1).cloned();
+        }
+        if let Some(v) = bare.strip_prefix(name).and_then(|r| r.strip_prefix('=')) {
+            if a.starts_with('-') {
+                return Some(v.to_owned());
             }
         }
     }
+    None
+}
+
+fn service_options(args: &[String], native: bool) -> Options {
+    Options {
+        addr: option(args, "addr").unwrap_or_else(|| "127.0.0.1:47615".into()),
+        config: option(args, "config").filter(|c| !c.is_empty()).map(PathBuf::from),
+        dist: option(args, "dist").map(PathBuf::from),
+        version: VERSION.into(),
+        native,
+        machine: None,
+    }
+}
+
+/// the service alone, until it's interrupted
+fn headless(args: &[String]) -> i32 {
+    sulfur_service::util::adopt_login_path();
+    tauri::async_runtime::block_on(async {
+        let service = match sulfur_service::start(service_options(args, false)).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
+                return 1;
+            }
+        };
+        println!("{}", serde_json::json!({ "type": "ready", "url": service.origin, "version": VERSION }));
+        eprintln!("Sulfur {VERSION} on {}", service.origin);
+        sulfur_service::util::interrupted().await;
+        service.stop().await;
+        0
+    })
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("sulfur-language") if args.len() == 2 => {
+            std::process::exit(tauri::async_runtime::block_on(sulfur_service::languages::helper_main(&args[1])))
+        }
+        Some("sulfur-sqlite") => std::process::exit(sulfur_service::sqlite::helper_main()),
+        _ => {}
+    }
+    if args.iter().any(|a| matches!(a.as_str(), "-headless" | "--headless" | "-headless=true" | "--headless=true")) {
+        std::process::exit(headless(&args));
+    }
+    sulfur_service::util::adopt_login_path();
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
-        .manage(Service(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![
-            ready,
-            finish_close,
-            install_update
-        ])
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .manage(Running(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![ready, finish_close, install_update])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if READY.load(Ordering::Acquire) {
@@ -225,60 +214,36 @@ fn main() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             if std::env::var_os("SULFUR_SERVICE_EXTERNAL").is_some() {
                 open_window(app.handle(), "http://127.0.0.1:47615")?;
                 return Ok(());
             }
-            let resources = app.path().resource_dir()?;
-            let dist = resources.join("resources/dist");
-            let bridge = resources.join("resources/lsp-ipc.cjs");
-            let (mut events, child) = app
-                .shell()
-                .sidecar("sulfur-service")?
-                .set_process_group(true)
-                .args(std::env::args_os().skip(1))
-                .args(["--dist", &dist.to_string_lossy()])
-                .env("SULFUR_NATIVE", "1")
-                .env("SULFUR_IPC_BRIDGE", bridge.to_string_lossy().as_ref())
-                .spawn()?;
-            *app.state::<Service>().0.lock().unwrap() = Some(child);
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let mut buffered = String::new();
-                while let Some(event) = events.recv().await {
-                    match event {
-                        CommandEvent::Stdout(bytes) => {
-                            buffered.push_str(&String::from_utf8_lossy(&bytes));
-                            // The shell plugin emits stdout by line; accept both line and raw framing.
-                            if let Ok(value) =
-                                serde_json::from_str::<serde_json::Value>(buffered.trim())
-                            {
-                                if value["type"] == "ready" {
-                                    if let Err(error) =
-                                        open_window(&handle, value["url"].as_str().unwrap_or(""))
-                                    {
-                                        eprintln!("{error}");
-                                        handle.exit(1);
-                                    }
-                                    buffered.clear();
-                                }
-                            }
+            let mut options = service_options(&args, true);
+            let addr = options.addr.clone();
+            // the service listens before the window asks it for the page: binding a
+            // loopback port takes about a millisecond
+            let started = tauri::async_runtime::block_on(async {
+                match sulfur_service::start(Options { addr: addr.clone(), ..service_options(&args, true) }).await {
+                    Err(StartError::InUse(_)) => {
+                        // another Sulfur already serving this computer: this window opens on it
+                        if let Some(origin) = sulfur_service::existing(&addr).await {
+                            return Ok(Err(origin));
                         }
-                        CommandEvent::Stderr(bytes) => {
-                            eprintln!("{}", String::from_utf8_lossy(&bytes))
-                        }
-                        CommandEvent::Terminated(_) => {
-                            if handle.state::<Service>().0.lock().unwrap().is_some() {
-                                READY.store(false, Ordering::Release);
-                                handle.exit(1);
-                            }
-                            break;
-                        }
-                        _ => {}
+                        options.addr = "127.0.0.1:0".into();
+                        sulfur_service::start(options).await.map(Ok)
                     }
+                    other => other.map(Ok),
                 }
-            });
+            })?;
+            match started {
+                Ok(service) => {
+                    let origin = service.origin.clone();
+                    *app.state::<Running>().0.lock().unwrap() = Some(service);
+                    open_window(app.handle(), &origin)?;
+                }
+                Err(origin) => open_window(app.handle(), &origin)?,
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -293,10 +258,7 @@ fn main() {
                 return;
             }
         }
-        if matches!(
-            event,
-            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
-        ) {
+        if matches!(event, tauri::RunEvent::Exit) {
             stop_service(app);
         }
     });
