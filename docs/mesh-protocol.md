@@ -65,7 +65,7 @@ Phosphorus can keep invoking `phosphorus sulfur-language` and
 `phosphorus sulfur-sqlite` on its own hosts: those remote helpers belong to that
 mesh and do not need to switch implementations for the IDE to connect.
 
-The former Go `hostkit` source is absent on this branch. Existing Go importers
+The former Go `hostkit` source is absent from this repository. Existing Go importers
 must pin the last compatible Go revision (or retain that implementation in their
 own codebase) until they move to the service/CLI protocol. Do not replace a Go
 module pin with this JS branch and expect Go imports to resolve. The separate

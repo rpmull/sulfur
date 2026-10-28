@@ -27,7 +27,7 @@ Sulfur, while working as a fully offline IDE, can link a mesh and have its machi
 [`docs/mesh-protocol.md`](docs/mesh-protocol.md) covers how meshes of different kinds are added and supported by Sulfur.
 
 
-## Development (`tauri-js`)
+## Development
 
 Sulfur's desktop shell is Tauri 2. The IDE services, package conversion, language
 server management and extension host run in Bun/JavaScript. Packaged apps include
@@ -52,10 +52,10 @@ prohibit agents from running builds.
 
 See [migration and acceptance testing](docs/tauri-js.md),
 [architecture](docs/sulfur-architecture.md), and the
-[mesh protocol](docs/mesh-protocol.md). The `tauri-js` branch is independently
-reviewable; existing Phosphorus Go consumers should remain pinned to the last
-compatible Go revision until they adopt the service protocol. Linking meshes
-continues to use the same HTTP and WebSocket APIs across either implementation.
+[mesh protocol](docs/mesh-protocol.md). Existing Phosphorus Go consumers should
+remain pinned to the last compatible Go revision until they adopt the service
+protocol. Linking meshes continues to use the same HTTP and WebSocket APIs across
+either implementation.
 
 ## License
 

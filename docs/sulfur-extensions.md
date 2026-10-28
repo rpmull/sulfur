@@ -450,7 +450,7 @@ export function activate(api) {
 - Your editors are live sessions: anyone with the same file open, an agent included, edits the same text you see.
 
 
-## JavaScript desktop runtime (`tauri-js`)
+## JavaScript desktop runtime
 
 Open VSX browser builds continue to run in sandboxed frames. Their local CommonJS
 and ES module dependencies are bundled at conversion time. Node-only packages

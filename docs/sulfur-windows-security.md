@@ -1,7 +1,7 @@
 # Historical Go build investigation
 
 This document records the previous Go/NSIS build and its antivirus investigation.
-Its binary metadata and build-specific findings do not describe `tauri-js`.
+Its binary metadata and build-specific findings do not describe the current Tauri app.
 Current architecture, signing and verification are in [tauri-js.md](tauri-js.md).
 
 # Sulfur Windows security investigation

@@ -1,4 +1,4 @@
-# Run manually after native acceptance testing. Pushing tauri-js never builds/releases an app.
+# Run manually after native acceptance testing. Pushing never builds or releases an app.
 name: release
 # The version is 1.0.<commits reachable from the dispatched commit>: the same commit always
 # releases as the same version, and each later commit as a higher one.

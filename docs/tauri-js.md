@@ -1,10 +1,10 @@
-# `tauri-js` migration and developer acceptance
+# Tauri migration and developer acceptance
 
-This branch replaces Sulfur's Go application and Go build tools with Tauri 2,
+The migration replaced Sulfur's Go application and Go build tools with Tauri 2,
 Bun 1.4.4 and JavaScript. Rust is limited to native window/dialog/update lifecycle
 and forwarding legacy executable helper commands. The service and extension
 compatibility work live in JavaScript. The original Go checkout and Phosphorus
-working tree are separate and are not modified by this branch.
+working tree are separate and were not modified by it.
 
 ## Running and building
 
@@ -114,7 +114,7 @@ needs separate resource testing.
 
 ## Native acceptance after the developer builds
 
-Before merging or releasing, exercise Windows, Linux and both Mac architectures:
+Before releasing, exercise Windows, Linux and both Mac architectures:
 
 1. Open the app over an existing profile. Verify remembered mesh links, credentials,
    appearance, layouts, drafts, settings and extensions. Check dialogs, external
@@ -140,7 +140,7 @@ to the developer under `AGENTS.md`.
 
 ## Signing, notices and release
 
-The manual-only release workflow runs on five native targets. Pushing this branch
+The manual-only release workflow runs on five native targets. Pushing
 does not build an app or publish a release. Its version is `1.0.<commit count>` of
 the dispatched commit, so a rerun of one commit releases the same version.
 
