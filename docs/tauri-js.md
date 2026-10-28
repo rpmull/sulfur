@@ -31,7 +31,8 @@ build script compresses each text asset of `dist/` into the binary once
 (source maps, `.gz` copies and unused font formats are left out), so the
 installed app has no resource folder for the page. Tauri packages the one
 executable with its license files. Build for each native architecture; the
-release workflow uses separate Intel/ARM macOS and Linux jobs. Developer builds
+release workflow builds Apple Silicon macOS (Intel Macs are no longer built) and
+separate x64/arm64 Linux jobs. Developer builds
 omit signed updater artifacts so no production signing key is needed. The
 manual release configuration enables them with the existing keys. Build outputs
 are ignored. `packaging/sulfur/build.sh` forwards to Tauri. The existing frontend
