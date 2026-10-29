@@ -83,7 +83,9 @@ Control Graph** and **Git: View History**.
 Repositories that keep files in Git LFS (a `filter=lfs` pattern in any
 `.gitattributes`) get a **Git LFS** box in Source Control: the tracked patterns,
 the git-lfs version on the machine running git, and how many LFS files are still
-pointers. **Pull LFS Files** (also **Git LFS: Pull Files** in the palette) brings
+pointers (a file you have edited or deleted is not one, and files a pull could not
+bring down, such as those under `lfs.fetchexclude`, are counted apart and not
+offered again). **Pull LFS Files** (also **Git LFS: Pull Files** in the palette) brings
 them down; **Git LFS: Install Hooks in This Repository** runs
 `git lfs install --local`. When git-lfs is missing, or files are not downloaded,
 a notification says so once per repository, and opening an LFS pointer file says

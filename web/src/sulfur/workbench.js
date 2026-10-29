@@ -7367,9 +7367,20 @@ async function git(args, o = {}) {
   if (['clone', 'push', 'pull', 'fetch'].includes(args[0])) body.creds = await forgejoCreds().catch(() => null);
   // nothing asked (an SSH password, a passphrase) for git the user didn't start: it fails instead
   if (o.quiet) body.quiet = true;
-  const r = await fetch(hostUrl(w.host, '/api/sulfur/git'), jsonPost(body));
-  const b = await r.json().catch(() => ({}));
-  if (r.status === 404) throw new Error(`${w.host}'s Phosphorus is older than this Sulfur: update the mesh for Source Control there`);
+  // git the user didn't start doesn't wait on a host that has stopped answering (the host
+  // stops it at its own deadline, a little sooner)
+  const stop = new AbortController();
+  const timer = o.quiet ? setTimeout(() => stop.abort(), 2 * 60 * 1000) : 0;
+  let r, b;
+  try {
+    r = await fetch(hostUrl(w.host, '/api/sulfur/git'), { ...jsonPost(body), signal: stop.signal });
+    b = await r.json().catch(() => ({}));
+  } catch (err) {
+    throw stop.signal.aborted ? new Error(`git ${args[0]} on ${w.host} took too long and was stopped`) : err;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (r.status === 404) throw new Error(`${w.host} doesn’t answer Sulfur’s git requests, so Source Control isn’t available there`);
   if (!r.ok) throw Object.assign(new Error(b.error || `status ${r.status}`), b);
   if (b.code !== 0 && !o.anyCode) {
     const said = String(b.err || b.out || '').trim().split('\n').filter(Boolean).slice(-3).join('\n');
@@ -7480,10 +7491,17 @@ const scmLfsSeen = new Map();
 async function scmLfs(s, where, fresh = false) {
   const id = `${s.host}\n${s.top}`;
   const last = scmLfsSeen.get(id);
-  if (last && (last.running || (!fresh && Date.now() - last.at < LFS_MS))) return;
-  const entry = { running: true, at: Date.now(), lfs: last?.lfs || null, said: last?.said || '' };
+  // one scan at a time; one asked for while another runs is run again once it ends, its
+  // answer (from before a pull, say) not trusted
+  if (last?.running) { if (fresh) last.stale = true; return; }
+  if (last && !fresh && Date.now() - last.at < LFS_MS) return;
+  const pulled = !!last?.pulled;
+  const entry = { running: true, at: Date.now(), lfs: last?.lfs || null, said: last?.said || '', stuck: last?.stuck || new Set(), pulled: false, stale: false };
   scmLfsSeen.set(id, entry);
   const top = { where, ...atTopOf(s) };
+  // a file git sees as changed or gone isn't a pointer waiting for its content, whatever
+  // git-lfs marks it
+  const changed = new Set([...(s.staged || []), ...(s.changes || [])].map((x) => x.path));
   let lfs = null;
   try {
     // the patterns any .gitattributes in the index sends through the lfs filter
@@ -7499,19 +7517,27 @@ async function scmLfs(s, where, fresh = false) {
       }
     }
     if (patterns.length) {
-      lfs = { patterns, installed: false, version: '', files: 0, missing: [] };
+      lfs = { patterns, installed: false, version: '', files: 0, missing: [], stuck: [] };
       const v = await git(['lfs', 'version'], { ...top, anyCode: true }).catch(() => null);
       lfs.installed = v?.code === 0;
       lfs.version = lfs.installed ? String(v.out || '').trim().split('\n')[0] : '';
       if (lfs.installed) {
-        // "<oid> * <path>" for a file whose content is here, "<oid> - <path>" for a pointer
-        const ls = await git(['lfs', 'ls-files'], { ...top, anyCode: true }).catch(() => null);
-        for (const line of String(ls?.out || '').replace(/\r/g, '').split('\n')) {
+        // "<oid> * <path>" for a file whose content is here, "<oid> - <path>" for one that
+        // isn't: a pointer, or a file edited or deleted since. A failed listing is no listing
+        const ls = await git(['lfs', 'ls-files'], { ...top, anyCode: true });
+        if (ls.code !== 0) throw new Error(ls.err);
+        const waiting = [];
+        for (const line of String(ls.out || '').replace(/\r/g, '').split('\n')) {
           const m = line.match(/^\S+ ([*-]) (.+)$/);
           if (!m) continue;
           lfs.files += 1;
-          if (m[1] === '-') lfs.missing.push(m[2]);
+          if (m[1] === '-' && !changed.has(m[2])) waiting.push(m[2]);
         }
+        // what a pull just left as pointers it can't bring (excluded by lfs.fetchexclude, not on
+        // the server) is not offered again; it stays that way while it stays a pointer
+        entry.stuck = new Set(pulled ? waiting : waiting.filter((p) => last?.stuck?.has(p)));
+        lfs.stuck = waiting.filter((p) => entry.stuck.has(p));
+        lfs.missing = waiting.filter((p) => !entry.stuck.has(p));
       }
     }
   } catch {
@@ -7520,23 +7546,42 @@ async function scmLfs(s, where, fresh = false) {
   entry.running = false;
   entry.at = Date.now();
   entry.lfs = lfs;
+  if (entry.stale) {
+    entry.stale = false;
+    entry.at = 0;
+    const now = I?.scm;
+    if (now && now.host === s.host && now.top === s.top) return scmLfs(now, where, true);
+  }
   if (!I?.scm || I.scm.host !== s.host || I.scm.top !== s.top) return;
   I.scm.lfs = lfs;
   paintScm();
   // said once a session for each repository and each way it stands
-  const say = !lfs ? '' : !lfs.installed ? 'absent' : lfs.missing.length ? `missing:${lfs.missing.length}` : '';
+  const say = !lfs ? '' : !lfs.installed ? 'absent' : lfs.missing.length ? `missing:${lfs.missing.length}` : lfs.stuck.length ? `stuck:${lfs.stuck.length}` : '';
   if (say && say !== entry.said) {
     const repo = baseName(s.top);
+    const n = lfs?.missing.length || lfs?.stuck.length || 0;
+    const files = `${n} Git LFS file${n === 1 ? '' : 's'} in ${repo}`;
     if (!lfs.installed) notify('warning', `${repo} keeps files in Git LFS, but git-lfs isn’t installed on ${s.host || 'this machine'}: those files are small text pointers until it is.`, { actions: [{ label: 'Get Git LFS', run: () => openExternal(LFS_SITE) }] });
-    else notify('info', `${lfs.missing.length} Git LFS file${lfs.missing.length === 1 ? '' : 's'} in ${repo} ${lfs.missing.length === 1 ? 'hasn’t' : 'haven’t'} been downloaded.`, { actions: [{ label: 'Pull LFS Files', run: () => scmLfsPull() }] });
+    else if (lfs.missing.length) notify('info', `${files} ${n === 1 ? 'hasn’t' : 'haven’t'} been downloaded.`, { actions: [{ label: 'Pull LFS Files', run: () => scmLfsPull() }] });
+    else notify('warning', `${files} couldn’t be downloaded: a pull left ${n === 1 ? 'it' : 'them'} as ${n === 1 ? 'a pointer' : 'pointers'} (excluded by lfs.fetchexclude, or not on the server).`);
   }
   entry.said = say;
 }
 const atTopOf = (s) => ({ dir: /^[A-Za-z]:\//.test(s.top || '') ? s.top.replace(/\//g, '\\') : s.top || undefined });
-function scmLfsPull() {
+async function scmLfsPull() {
   if (!I.scm?.top) return notify('warning', 'Open a folder in a Git repository first.');
   if (I.scm.lfs && !I.scm.lfs.installed) return notify('warning', `Install git-lfs on ${I.scm.host || 'this machine'} first.`, { actions: [{ label: 'Get Git LFS', run: () => openExternal(LFS_SITE) }] });
-  return scmOp(['lfs', 'pull'], 'Pulling Git LFS files', atTop());
+  const { host, top } = I.scm;
+  const where = gitWhere();
+  const r = await scmOp(['lfs', 'pull'], 'Pulling Git LFS files', atTop());
+  // a pull that went through and left pointers behind couldn't bring them: counted apart
+  // from the files still to come, not offered again
+  const entry = scmLfsSeen.get(`${host}\n${top}`);
+  if (r && entry) {
+    entry.pulled = true;
+    if (I?.scm?.host === host && I.scm.top === top) scmLfs(I.scm, where, true);
+  }
+  return r;
 }
 function scmLfsInstall() {
   if (!I.scm?.top) return notify('warning', 'Open a folder in a Git repository first.');
@@ -7545,22 +7590,29 @@ function scmLfsInstall() {
 
 // the upstream fetched quietly when a repository with one is first seen and every few
 // minutes after: status alone counts against what the last fetch brought, 0↓ until then
+// A fetch that fails (offline, a login it can't answer, a server that's down) is tried again
+// after twice as long each time, up to about an hour, instead of every few minutes for good
 const AUTO_FETCH_MS = 3 * 60 * 1000;
 const scmFetched = new Map();
 function scmAutoFetch(s, where) {
   if (!setting('git.autofetch') || !s.upstream || !s.top || !where) return;
   const id = `${s.host}\n${s.top}`;
   const last = scmFetched.get(id);
-  if (last && (last.running || Date.now() - last.at < AUTO_FETCH_MS)) return;
-  const entry = { running: true, at: Date.now() };
+  if (last && (last.running || Date.now() - last.at < last.wait)) return;
+  const entry = { running: true, at: Date.now(), wait: AUTO_FETCH_MS, fails: last?.fails || 0, timer: last?.timer };
   scmFetched.set(id, entry);
   git(['fetch', '--prune'], { where, quiet: true })
     .catch(() => null)
     .then((r) => {
       entry.running = false;
       entry.at = Date.now();
-      if (r && I?.scm?.host === s.host && I.scm.top === s.top) scmRefresh();
-      setTimeout(() => { if (I?.scm?.host === s.host && I.scm.top === s.top) scmRefresh(); }, AUTO_FETCH_MS);
+      entry.fails = r ? 0 : entry.fails + 1;
+      entry.wait = AUTO_FETCH_MS * 2 ** Math.min(entry.fails, 4);
+      const here = () => I?.scm?.host === s.host && I.scm.top === s.top;
+      if (r && here()) scmRefresh();
+      // one timer a repository, a second past the wait so the refresh finds it over
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => { if (here()) scmRefresh(); }, entry.wait + 1000);
     });
 }
 
@@ -7679,9 +7731,15 @@ function scmLfsBox(lfs) {
     box.append(get);
     return box;
   }
+  const stuck = lfs.stuck?.length || 0;
   box.append(el('p', '', lfs.missing.length
     ? `${lfs.missing.length} of ${lfs.files} LFS file${lfs.files === 1 ? '' : 's'} not downloaded (${shown}).`
-    : `${lfs.files} file${lfs.files === 1 ? '' : 's'} in LFS (${shown}), all downloaded.`));
+    : `${lfs.files} file${lfs.files === 1 ? '' : 's'} in LFS (${shown}), ${stuck ? 'the rest downloaded' : 'all downloaded'}.`));
+  if (stuck) {
+    const left = el('p', 'ide-run-note', `${stuck} couldn’t be downloaded by a pull: excluded by lfs.fetchexclude, or not on the server.`);
+    left.title = lfs.stuck.slice(0, 20).join('\n');
+    box.append(left);
+  }
   if (lfs.missing.length) {
     const pull = Object.assign(el('button', 'ide-button'), { type: 'button', textContent: 'Pull LFS Files' });
     pull.addEventListener('click', () => scmLfsPull());
@@ -7762,7 +7820,7 @@ async function scmOp(args, doing, o = {}) {
 }
 async function scmAfter() {
   if (!I) return;
-  for (const e of scmLfsSeen.values()) e.at = 0;
+  for (const e of scmLfsSeen.values()) { e.at = 0; if (e.running) e.stale = true; }
   await scmRefresh();
   if (!I) return;
   loadDir(I.st.root, true);
@@ -10982,8 +11040,8 @@ async function toolchains(host, fresh = false) {
   const pr = fetch(hostUrl(host, `/api/sulfur/toolchains?host=${encodeURIComponent(host)}${fresh ? '&fresh=1' : ''}`), { cache: 'no-store' })
     .then(async (r) => {
       const b = await r.json().catch(() => ({}));
-      // a host whose Phosphorus predates Sulfur's builds has no such call
-      if (r.status === 404) throw new Error(`${host}'s Phosphorus is older than this Sulfur: update the mesh to build there`);
+      // a host that doesn't answer the call can't be built on from here
+      if (r.status === 404) throw new Error(`${host} doesn’t report its toolchains to Sulfur, so building there isn’t available`);
       if (!r.ok) throw new Error(b.error || `status ${r.status}`);
       return b;
     });

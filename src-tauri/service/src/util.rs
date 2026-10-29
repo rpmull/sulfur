@@ -333,7 +333,49 @@ pub fn hidden_std(program: impl AsRef<OsStr>) -> std::process::Command {
     cmd
 }
 
-/// a command run to its end, or killed at its deadline
+/// a process and everything it started, killed when this is dropped unless it ended on
+/// its own: git hands its work to ssh, git-remote-https, git-lfs and credential helpers,
+/// and killing git alone leaves those waiting (on a sign-in nobody sees) for good
+struct Tree {
+    pid: Option<u32>,
+}
+
+impl Tree {
+    fn ended(&mut self) {
+        self.pid = None;
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        let Some(pid) = self.pid.take() else { return };
+        #[cfg(unix)]
+        // SAFETY: signals the process group the command was started as the leader of
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        #[cfg(windows)]
+        {
+            // run to its end here, before the process itself is taken: the tree is found from it
+            let _ = hidden_std("taskkill").args(["/pid", &pid.to_string(), "/t", "/f"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
+    }
+}
+
+/// what a pipe gives, kept as it comes so a read cut short still has what it read
+async fn drain(mut pipe: impl tokio::io::AsyncRead + Unpin, into: std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
+    let mut buf = [0u8; 8192];
+    while let Ok(n) = pipe.read(&mut buf).await {
+        if n == 0 {
+            break;
+        }
+        into.lock().unwrap().extend_from_slice(&buf[..n]);
+    }
+}
+
+/// a command run to its end, or killed with everything it started at its deadline (or if
+/// the caller goes away). Its output is what it printed by the time it ended: a helper
+/// it left running that still holds its pipes is waited for a moment, not to the deadline
 pub async fn command(
     args: &[String],
     cwd: Option<&Path>,
@@ -349,6 +391,9 @@ pub async fn command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // its own process group, so everything it starts can be signalled together
+    #[cfg(unix)]
+    cmd.process_group(0);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -358,28 +403,32 @@ pub async fn command(
     let mut child = cmd
         .spawn()
         .map_err(|e| Fail::new(format!("{program}: {e}"), 500))?;
-    let mut stdout = child.stdout.take().expect("piped");
-    let mut stderr = child.stderr.take().expect("piped");
-    let run = async {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let (a, b, status) = tokio::join!(
-            stdout.read_to_end(&mut out),
-            stderr.read_to_end(&mut err),
-            child.wait()
-        );
-        a?;
-        b?;
-        let status = status?;
-        io::Result::Ok(Output {
-            out: String::from_utf8_lossy(&out).into_owned(),
-            err: String::from_utf8_lossy(&err).into_owned(),
-            code: exit_code(&status),
-        })
+    let mut tree = Tree { pid: child.id() };
+    let (out, err) = (std::sync::Arc::new(std::sync::Mutex::new(Vec::new())), std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+    let readers = tokio::spawn({
+        let (stdout, stderr) = (child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
+        let (o, e) = (out.clone(), err.clone());
+        async move {
+            tokio::join!(drain(stdout, o), drain(stderr, e));
+        }
+    });
+    // aborted with the command, whichever way it ends
+    let _readers = AbortOnDrop(readers.abort_handle());
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(status) => status?,
+        Err(_) => return fail_at(format!("{program} took too long and was stopped"), 504),
     };
-    match tokio::time::timeout(timeout, run).await {
-        Ok(r) => Ok(r?),
-        Err(_) => fail_at(format!("{program} took too long and was stopped"), 504),
+    tree.ended();
+    let _ = tokio::time::timeout(Duration::from_secs(2), readers).await;
+    let text = |b: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>| String::from_utf8_lossy(&b.lock().unwrap()).into_owned();
+    Ok(Output { out: text(&out), err: text(&err), code: exit_code(&status) })
+}
+
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 

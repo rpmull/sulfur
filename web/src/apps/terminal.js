@@ -292,8 +292,8 @@ function taskTerminal(view, host, task, opts = {}) {
       term.write(b);
       opts.onText?.(dec.decode(b, { stream: true }));
     };
-    // closed before a word: the host has no runs to give, most likely a Phosphorus older than this Sulfur
-    ws.onclose = () => end(-1, heard ? 'the connection closed' : `${host} didn't take the run: its Phosphorus is likely older than this Sulfur. Update the mesh (the status app's update, or phos update all), then run it again.`);
+    // closed before a word: the host took no run
+    ws.onclose = () => end(-1, heard ? 'the connection closed' : `${host} closed the connection before the run started: it may be offline or not take runs from Sulfur.`);
     term.onData((d) => { if (!ended && ws?.readyState === WebSocket.OPEN) ws.send(enc.encode(d)); });
     term.onResize(() => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })); });
   }).catch((err) => { view.textContent = err.message; end(-1, err.message); });

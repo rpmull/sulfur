@@ -572,6 +572,16 @@ async fn git_with(p: GitRequest, asks: Option<&Arc<crate::askpass::Asks>>) -> Re
         return fail("a full path to the folder");
     }
     let mut env = vec![("GIT_TERMINAL_PROMPT".into(), "0".into()), ("LC_ALL".into(), "C".into())];
+    if p.quiet {
+        // nobody is there to sign in: Git Credential Manager would wait on a window (or a
+        // browser) for good, which GIT_TERMINAL_PROMPT doesn't stop; a transfer that has
+        // stopped moving gives up instead of holding the fetch open
+        env.extend([
+            ("GCM_INTERACTIVE".into(), "never".into()),
+            ("GIT_HTTP_LOW_SPEED_LIMIT".into(), "1000".into()),
+            ("GIT_HTTP_LOW_SPEED_TIME".into(), "60".into()),
+        ]);
+    }
     // the run's askpass token, valid while it runs
     let mut asking = None;
     if slow || verb == "remote" {
@@ -600,9 +610,19 @@ async fn git_with(p: GitRequest, asks: Option<&Arc<crate::askpass::Asks>>) -> Re
         argv.extend(["-C".into(), p.dir.clone()]);
     }
     argv.extend(args);
-    let out = command(&argv, None, &env, Duration::from_secs(if slow { 900 } else { 120 })).await;
+    let out = command(&argv, None, &env, git_deadline(slow, p.quiet)).await;
     drop(asking);
     out
+}
+
+/// how long a git command may take: a clone or push as long as a big repository needs,
+/// what the page runs on its own (an autofetch) a minute and a half, the rest two minutes
+pub(crate) fn git_deadline(slow: bool, quiet: bool) -> Duration {
+    Duration::from_secs(match (slow, quiet) {
+        (true, true) => 90,
+        (true, false) => 900,
+        _ => 120,
+    })
 }
 
 pub(crate) const KNOWN: &[(&str, &str, &str, &str)] = &[
@@ -783,6 +803,21 @@ mod tests {
         assert!(alone.starts_with("ssh ") && alone.contains("BatchMode=yes") && alone.contains("ConnectTimeout="));
         let asked = ssh_command(true);
         assert!(!asked.contains("BatchMode") && asked.contains("ConnectTimeout="));
+    }
+
+    #[test]
+    fn git_the_page_runs_on_its_own_gets_a_shorter_deadline() {
+        assert!(git_deadline(true, true) < git_deadline(true, false));
+        assert_eq!(git_deadline(false, true), git_deadline(false, false));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_helper_left_holding_the_pipes_does_not_hold_up_a_finished_command() {
+        let started = std::time::Instant::now();
+        let r = command(&["sh".into(), "-c".into(), "sleep 30 & echo done".into()], None, &[], Duration::from_secs(20)).await.unwrap();
+        assert_eq!(r.out.trim(), "done");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[tokio::test]

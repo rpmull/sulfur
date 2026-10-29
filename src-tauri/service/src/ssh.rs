@@ -416,31 +416,39 @@ async fn authenticate(handle: &mut Handle, spec: &Spec, a: &Answers) -> Result<(
 
 /// one command run to its end without a terminal: what it printed and its exit code
 async fn exec(handle: &Handle, cmd: &str, timeout: Duration) -> Res<Output> {
-    let run = async {
-        let mut ch = handle.channel_open_session().await.map_err(ssh_fail)?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    let slow = || fail_at("the command took too long and was stopped", 504);
+    let opened = async {
+        let ch = handle.channel_open_session().await.map_err(ssh_fail)?;
         ch.exec(true, cmd).await.map_err(ssh_fail)?;
         // nothing to read: a command that asks gets end of input, not a wait
         ch.eof().await.map_err(ssh_fail)?;
-        let (mut out, mut err, mut code) = (Vec::new(), Vec::new(), None);
-        while let Some(m) = ch.wait().await {
-            match m {
-                ChannelMsg::Data { data } => out.extend_from_slice(&data),
-                ChannelMsg::ExtendedData { data, ext: 1 } => err.extend_from_slice(&data),
-                ChannelMsg::ExitStatus { exit_status } => code = Some(exit_status as i32),
-                _ => {}
-            }
-        }
-        Ok(Output {
-            out: String::from_utf8_lossy(&out).into_owned(),
-            err: String::from_utf8_lossy(&err).into_owned(),
-            // ended by a signal, or the connection gone: never a success
-            code: code.unwrap_or(255),
-        })
+        Ok::<_, Fail>(ch)
     };
-    match tokio::time::timeout(timeout, run).await {
-        Ok(r) => r,
-        Err(_) => fail_at("the command took too long and was stopped", 504),
+    let Ok(opened) = tokio::time::timeout_at(deadline, opened).await else { return slow() };
+    let mut ch = opened?;
+    let (mut out, mut err, mut code) = (Vec::new(), Vec::new(), None);
+    loop {
+        // the channel is the command's: closed at the deadline, the host's end of its pipes
+        // goes and it stops, instead of running on there with nobody to hear it
+        let Ok(m) = tokio::time::timeout_at(deadline, ch.wait()).await else {
+            let _ = tokio::time::timeout(Duration::from_secs(2), ch.close()).await;
+            return slow();
+        };
+        match m {
+            Some(ChannelMsg::Data { data }) => out.extend_from_slice(&data),
+            Some(ChannelMsg::ExtendedData { data, ext: 1 }) => err.extend_from_slice(&data),
+            Some(ChannelMsg::ExitStatus { exit_status }) => code = Some(exit_status as i32),
+            Some(_) => {}
+            None => break,
+        }
     }
+    Ok(Output {
+        out: String::from_utf8_lossy(&out).into_owned(),
+        err: String::from_utf8_lossy(&err).into_owned(),
+        // ended by a signal, or the connection gone: never a success
+        code: code.unwrap_or(255),
+    })
 }
 
 // --- terminals and runs: a channel with a pseudo-terminal -----------------------------------
@@ -1116,7 +1124,7 @@ impl Remote {
         if !p.dir.is_empty() && !p.dir.starts_with('/') {
             return fail("a full path to the folder");
         }
-        exec(&self.handle, &sh_c(&git_line(&p.dir, &args)), Duration::from_secs(if slow { 900 } else { 120 })).await
+        exec(&self.handle, &sh_c(&git_line(&p.dir, &args)), processes::git_deadline(slow, p.quiet)).await
     }
 
     /// the host's compilers, build tools and runtimes; probed again after ten minutes
