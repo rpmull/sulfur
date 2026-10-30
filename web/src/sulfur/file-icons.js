@@ -30,7 +30,13 @@ const binaries = new Set('dll exe so dylib lib a o obj wasm class pyc pdb'.split
 export function fileKind(path, { directory = false, open = false, entries = [] } = {}) {
   const name = String(path || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
   if (directory) {
-    const project = entries.map((entry) => entry.name).find((name) => /\.(?:cs|fs|vb|vcx?)proj$/i.test(name));
+    // the folder's project file, found once per listing: the explorer asks for every folder
+    // row it paints, and a listing of thousands of names was searched each time
+    let project = entries.projectFile;
+    if (project === undefined) {
+      project = entries.map((entry) => entry.name).find((name) => /\.(?:cs|fs|vb|vcx?)proj$/i.test(name)) || null;
+      try { Object.defineProperty(entries, 'projectFile', { value: project, enumerable: false, configurable: true }); } catch {}
+    }
     if (project) { const descriptor = fileKind(project); return { ...descriptor, folder: true, title: descriptor.title + ' folder' }; }
     return kind(open ? 'folderOpen' : 'folder', name === 'properties' ? 'Project properties folder' : 'Folder', 'folder', name === 'properties' ? 'properties' : '');
   }
