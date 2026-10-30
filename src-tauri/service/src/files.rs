@@ -159,7 +159,9 @@ pub fn mtime_ms(meta: &fs::Metadata) -> f64 {
 }
 
 /// a folder's entries, each as its link's target says, by ICU root order
-fn entries_at(dir: &Path) -> Res<Vec<Entry>> {
+/// a folder's entries, sorted; with_empty says whether each subfolder is empty, which costs
+/// a read of it (a listing shows it; a tree walk or a search reads the subfolder anyway)
+fn entries_at(dir: &Path, with_empty: bool) -> Res<Vec<Entry>> {
     let mut out = Vec::new();
     for ent in fs::read_dir(dir)? {
         let Ok(ent) = ent else { continue };
@@ -180,7 +182,7 @@ fn entries_at(dir: &Path) -> Res<Vec<Entry>> {
             mtime: target.as_ref().map(|t| mtime_ms(t).round() as i64),
             empty: None,
         };
-        if dir_ && !link {
+        if dir_ && !link && with_empty {
             if let Ok(mut rd) = fs::read_dir(&file) {
                 e.empty = Some(rd.next().is_none());
             }
@@ -235,7 +237,7 @@ impl Files {
 
     pub async fn entries(&self, id: &str, rel: &str) -> Res<Vec<Entry>> {
         let dir = self.resolve(id, rel, false).await?;
-        blocking(move || entries_at(&dir)).await
+        blocking(move || entries_at(&dir, true)).await
     }
 
     pub async fn list(&self, id: &str, rel: &str) -> Res<Value> {
@@ -261,7 +263,7 @@ impl Files {
             while lv <= max_depth && !level.is_empty() && !truncated {
                 let mut next = Vec::new();
                 for (i, (dir, abs)) in level.iter().enumerate() {
-                    let children = match entries_at(abs) {
+                    let children = match entries_at(abs, false) {
                         Ok(c) => c,
                         Err(e) if lv == 1 && i == 0 => return Err(e),
                         Err(_) => continue,
@@ -327,7 +329,7 @@ impl Files {
                 glob: &str,
                 skipped: &dyn Fn(&str) -> bool,
             ) {
-                let Ok(children) = entries_at(abs) else { return };
+                let Ok(children) = entries_at(abs, false) else { return };
                 for e in children {
                     if e.dir && skipped(&e.name) {
                         continue;

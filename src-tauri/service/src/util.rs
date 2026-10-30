@@ -696,19 +696,27 @@ pub fn locale_sort<T>(items: &mut [T], name: impl Fn(&T) -> &str, dir: impl Fn(&
 
 /// a name matched against a glob of * and ?, ignoring case
 pub fn glob_match(pattern: &str, name: &str) -> bool {
+    // ASCII both (nearly every name and glob): matched over the bytes as they lie, no copy
+    if pattern.is_ascii() && name.is_ascii() {
+        return glob_match_in(pattern.as_bytes(), name.as_bytes(), |a, b| a.eq_ignore_ascii_case(&b), b'?', b'*', b'\n');
+    }
     let p: Vec<char> = pattern.chars().flat_map(char::to_lowercase).collect();
     let n: Vec<char> = name.chars().flat_map(char::to_lowercase).collect();
+    glob_match_in(&p, &n, |a, b| a == b, '?', '*', '\n')
+}
+
+fn glob_match_in<T: Copy + PartialEq>(p: &[T], n: &[T], same: impl Fn(T, T) -> bool, any: T, star_c: T, nl: T) -> bool {
     let (mut pi, mut ni) = (0, 0);
     let (mut star, mut mark) = (usize::MAX, 0);
     while ni < n.len() {
-        if pi < p.len() && (p[pi] == '?' || (p[pi] == n[ni] && p[pi] != '*')) && n[ni] != '\n' {
+        if pi < p.len() && (p[pi] == any || (same(p[pi], n[ni]) && p[pi] != star_c)) && n[ni] != nl {
             pi += 1;
             ni += 1;
-        } else if pi < p.len() && p[pi] == '*' {
+        } else if pi < p.len() && p[pi] == star_c {
             star = pi;
             mark = ni;
             pi += 1;
-        } else if star != usize::MAX && n[mark] != '\n' {
+        } else if star != usize::MAX && n[mark] != nl {
             pi = star + 1;
             mark += 1;
             ni = mark;
@@ -716,7 +724,7 @@ pub fn glob_match(pattern: &str, name: &str) -> bool {
             return false;
         }
     }
-    while pi < p.len() && p[pi] == '*' {
+    while pi < p.len() && p[pi] == star_c {
         pi += 1;
     }
     pi == p.len()
@@ -745,6 +753,10 @@ mod tests {
         assert!(glob_match("*.JS", "dir.js"));
         assert!(glob_match("a?c", "abc"));
         assert!(!glob_match("a?c", "abbc"));
+        // beyond ASCII, case-blind through Unicode lowercasing
+        assert!(glob_match("*.TXT", "Ünïcode.txt"));
+        assert!(glob_match("ünï*", "ÜNÏcode.txt"));
+        assert!(!glob_match("*.md", "Ünïcode.txt"));
         assert!(glob_match("*", ""));
         assert!(skipper("node_modules, .git")("node_modules"));
     }
