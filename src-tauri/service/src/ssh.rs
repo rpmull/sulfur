@@ -36,7 +36,7 @@ use crate::{
     files::{find_from, parse_count, posix_join, read_body, Entry, Share, LIST_MAX, TREE_MAX, UPLOAD_MAX, UPLOAD_PREFIX},
     mesh,
     processes::{self, GitRequest, Proc, Shell, Shells, Terminals, KNOWN, UNIX_PATH},
-    util::{fail, fail_at, glob_match, home_dir, locale_compare, skipper, Fail, Output, Res, GONE, MAX_TEXT},
+    util::{fail, fail_at, glob_match, home_dir, skipper, Fail, Output, Res, GONE, MAX_TEXT},
     ws::Ws,
 };
 
@@ -582,13 +582,13 @@ impl RemoteFiles {
                 name,
             });
         }
-        out.sort_by(|a, b| locale_compare(&a.name, &b.name));
+        crate::util::locale_sort(&mut out, |e| &e.name, |_| false);
         Ok(out)
     }
 
     pub async fn list(&self, id: &str, rel: &str) -> Res<Value> {
         let mut entries = self.entries(&self.path(id, rel)?).await?;
-        entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| locale_compare(&a.name, &b.name)));
+        crate::util::locale_sort(&mut entries, |e| &e.name, |e| e.dir);
         let truncated = entries.len() > LIST_MAX;
         entries.truncate(LIST_MAX);
         Ok(json!({ "path": rel, "entries": entries, "truncated": truncated }))

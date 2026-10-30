@@ -769,6 +769,7 @@
 .ide-prob-file, .ide-prob { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 12px; cursor: pointer; white-space: nowrap; }
 .ide-prob-file:hover, .ide-prob:hover { background: var(--ide-hover); }
 .ide-prob { padding-left: 36px; }
+.ide-prob-more { color: var(--ide-muted); cursor: default; font-style: italic; }
 .ide-chev-ic { width: 14px; height: 14px; }
 .ide-prob-file .ide-fi { margin-right: 0; }
 .ide-prob-dir { color: var(--ide-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }

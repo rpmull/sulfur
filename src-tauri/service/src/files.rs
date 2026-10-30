@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 use crate::util::{
     contains_ci, text_matches,
-    fail, fail_at, glob_match, home_dir, locale_compare, safe_path, skipper, Fail, Res, MAX_TEXT,
+    fail, fail_at, glob_match, home_dir, locale_sort, safe_path, skipper, Fail, Res, MAX_TEXT,
 };
 
 pub(crate) const LIST_MAX: usize = 5000;
@@ -187,7 +187,7 @@ fn entries_at(dir: &Path) -> Res<Vec<Entry>> {
         }
         out.push(e);
     }
-    out.sort_by(|a, b| locale_compare(&a.name, &b.name));
+    locale_sort(&mut out, |e| &e.name, |_| false);
     Ok(out)
 }
 
@@ -240,7 +240,7 @@ impl Files {
 
     pub async fn list(&self, id: &str, rel: &str) -> Res<Value> {
         let mut entries = self.entries(id, rel).await?;
-        entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| locale_compare(&a.name, &b.name)));
+        locale_sort(&mut entries, |e| &e.name, |e| e.dir);
         let truncated = entries.len() > LIST_MAX;
         entries.truncate(LIST_MAX);
         Ok(json!({ "path": rel, "entries": entries, "truncated": truncated }))

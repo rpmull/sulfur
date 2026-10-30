@@ -674,6 +674,26 @@ pub fn locale_compare(a: &str, b: &str) -> std::cmp::Ordering {
         .then_with(|| a.encode_utf16().cmp(b.encode_utf16()))
 }
 
+/// a name's place in that order, worked out once: a listing sorted by these keys
+/// normalizes each name once rather than twice per comparison
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub struct SortKey {
+    prim: Vec<i32>,
+    marks: Vec<String>,
+    upper: Vec<bool>,
+    units: Vec<u16>,
+}
+
+pub fn sort_key(s: &str) -> SortKey {
+    let k = root_key(s);
+    SortKey { prim: k.prim, marks: k.marks, upper: k.upper, units: s.encode_utf16().collect() }
+}
+
+/// items sorted as locale_compare orders their names, folders first when asked
+pub fn locale_sort<T>(items: &mut [T], name: impl Fn(&T) -> &str, dir: impl Fn(&T) -> bool) {
+    items.sort_by_cached_key(|x| (!dir(x), sort_key(name(x))));
+}
+
 /// a name matched against a glob of * and ?, ignoring case
 pub fn glob_match(pattern: &str, name: &str) -> bool {
     let p: Vec<char> = pattern.chars().flat_map(char::to_lowercase).collect();
@@ -736,5 +756,13 @@ mod tests {
         assert_eq!(v, ["_x", "10", "2", "a", "A", "b", "e", "é", "Z"]);
         assert_eq!(locale_compare("dir", "binary"), Greater);
         assert_eq!(locale_compare("a", "a"), Equal);
+        // the cached keys order names the same, folders first when asked
+        let mut names: Vec<(&str, bool)> = vec![("b", false), ("A", true), ("a", false), ("_x", false), ("10", true), ("é", false), ("e", false), ("Z", true)];
+        locale_sort(&mut names, |x| x.0, |x| x.1);
+        assert_eq!(names.iter().map(|x| x.0).collect::<Vec<_>>(), ["10", "A", "Z", "_x", "a", "b", "e", "é"]);
+        let mut plain = vec!["b", "A", "a", "_x", "10", "2", "é", "e", "Z"];
+        locale_sort(&mut plain, |x| x, |_| false);
+        assert_eq!(plain, ["_x", "10", "2", "a", "A", "b", "e", "é", "Z"]);
+        assert!(sort_key("a") < sort_key("A") && sort_key("e") < sort_key("é") && sort_key("x") == sort_key("x"));
     }
 }

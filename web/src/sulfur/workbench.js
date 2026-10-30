@@ -5521,6 +5521,7 @@ function problemFilterTest(text) {
   }
   return (x, rel) => (!keep.length || keep.some((m) => m(x, rel))) && !drop.some((m) => m(x, rel));
 }
+const PROBLEMS_PER_FILE = 200, PROBLEMS_MAX = 2000;
 function paintProblems() {
   const pv = I.panelViews.get('problems');
   // by file: the open files' syntax errors, then what the last build said
@@ -5575,6 +5576,7 @@ function paintProblems() {
   }
   if (!count) rows.push(el('div', 'ide-empty-note', 'No results found with the provided filter criteria.'));
   const rank = { error: 0, warning: 1, info: 2 };
+  let made = 0;
   for (const [rel, list] of [...shown].sort((a, b) => a[0].localeCompare(b[0]))) {
     const open = !I.probShut.has(rel);
     const head = el('div', 'ide-prob-file');
@@ -5584,7 +5586,14 @@ function paintProblems() {
     head.addEventListener('click', () => { if (open) I.probShut.add(rel); else I.probShut.delete(rel); paintProblems(); });
     rows.push(head);
     if (!open) continue;
-    for (const x of [...list].sort((a, b) => rank[a.sev] - rank[b.sev] || a.line - b.line)) {
+    // a build gone wrong reports thousands: the worst first, so many per file and in all,
+    // the rest counted rather than made into rows the panel can't show anyway
+    const sorted = [...list].sort((a, b) => rank[a.sev] - rank[b.sev] || a.line - b.line);
+    const room = Math.max(0, Math.min(PROBLEMS_PER_FILE, PROBLEMS_MAX - made));
+    const extra = sorted.length - room;
+    if (extra > 0) sorted.length = room;
+    made += sorted.length;
+    for (const x of sorted) {
       const r = el('div', 'ide-prob');
       r.setAttribute('role', 'treeitem');
       r.append(icon(x.sev === 'warning' ? 'warning' : x.sev === 'info' ? 'info' : 'error', `ide-prob-ic ${x.sev}`), el('span', 'ide-prob-what', x.msg), el('span', 'ide-prob-src', x.src), el('span', 'ide-prob-at', `[Ln ${x.line}, Col ${x.col}]`));
@@ -5597,6 +5606,11 @@ ${rel}:${x.line}:${x.col}`;
         { label: 'Copy Message', run: () => copyMenuText(x.msg) },
         { label: 'Copy Problem', run: () => copyMenuText(`${rel}:${x.line}:${x.col}: ${x.msg}`) }, '-', ...panelItems('problems')]);
       rows.push(r);
+    }
+    if (extra > 0) {
+      const more = el('div', 'ide-prob ide-prob-more', `${extra} more in this file`);
+      more.setAttribute('role', 'treeitem');
+      rows.push(more);
     }
   }
   pv.list.replaceChildren(...rows);

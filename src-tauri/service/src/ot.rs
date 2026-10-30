@@ -220,6 +220,19 @@ pub fn parse_ops(v: &J) -> Option<Vec<Op>> {
 }
 
 /// an operation spanning exactly a text of `length`, inserting at most `max`
+/// the length a text of `length` units has once ops are applied, with no text made
+pub fn applied_len(length: usize, ops: &[Op]) -> usize {
+    let mut out = length;
+    for o in ops {
+        match o {
+            Op::S(s) => out += s.len(),
+            Op::N(n) if *n < 0 => out = out.saturating_sub(n.unsigned_abs() as usize),
+            _ => {}
+        }
+    }
+    out
+}
+
 pub fn valid(ops: &[Op], length: usize, max: usize) -> bool {
     if ops.len() > max {
         return false;
@@ -248,6 +261,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn applied_length_matches_the_text_made() {
+        let doc = u("hello world");
+        let ops = vec![Op::N(6), Op::S(u("brave ")), Op::N(-5), Op::S(u("there"))];
+        assert_eq!(applied_len(doc.len(), &ops), apply(&doc, &ops).len());
+        assert_eq!(applied_len(3, &[Op::N(-3)]), 0);
+    }
     #[test]
     fn concurrent_edits_converge() {
         let doc = u("a😀b");

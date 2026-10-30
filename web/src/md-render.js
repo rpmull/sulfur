@@ -5,7 +5,9 @@
 // read too: [[links]], ![[embeds]], > [!callouts], ==highlights==, #tags,
 // %%comments%% and a note's --- properties ---. Loaded on first use.
 import { marked, Renderer, Lexer } from 'marked';
-import hljs from 'highlight.js';
+// the common languages alone (highlight.js's own cut of ~40): a quarter of the whole, loaded
+// the first time a note, a hover or a chat shows code
+import hljs from 'highlight.js/lib/common';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&#34;', "'": '&#39;' })[c]);
 

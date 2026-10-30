@@ -384,7 +384,8 @@ impl Collab {
                         }
                     }
                 }
-                if !ok || !ot::valid(&ops, st.text.len(), MAX_TEXT) || ot::apply(&st.text, &ops).len() > MAX_TEXT {
+                // (the length worked out from the ops: the text itself is made once, on commit)
+                if !ok || !ot::valid(&ops, st.text.len(), MAX_TEXT) || ot::applied_len(st.text.len(), &ops) > MAX_TEXT {
                     resync(&st);
                     return Ok(());
                 }
