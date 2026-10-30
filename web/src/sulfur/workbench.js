@@ -1441,6 +1441,7 @@ function buildExplorer() {
 // the folder the workspace is, its tree read afresh
 // l: the place it's in, the workspace's own when left out
 async function setRoot(dir, first = false, l = locOf()) {
+  if (I) I.projectMemo = null;
   const d = cleanPath(dir);
   if (!d || !inScope(d, l) || I.switchingWorkspace) return false;
   const st = I.st;
@@ -2858,6 +2859,7 @@ function tabState(t, info) {
   if (I.find?.open && t === I.active && was && was.length !== info.length) findSoon();
   // the user's settings and keys read again once their file's saved
   if (t.rel && was?.dirty && !info.dirty) {
+    I.projectMemo = null;
     languages.saved(t);
     emit('save', { path: t.rel });
     if (t.rel === SETTINGS_PATH() || t.rel === KEYS_PATH()) loadUserFiles();
@@ -11357,7 +11359,18 @@ async function detectProject() {
 }
 
 // a folder's own build files, as a project
+// what a folder's project is, kept a short while: every tab switch asks on the way from the
+// file's folder up to the root, and each ask read the folder's package.json, global.json or
+// makefile from its host again
 async function projectAt(root) {
+  const memo = I ? (I.projectMemo ||= new Map()) : null;
+  const hit = memo?.get(root);
+  if (hit && Date.now() - hit.at < 15000) return hit.p;
+  const p = await projectAtNow(root);
+  if (I && memo === I.projectMemo) memo.set(root, { at: Date.now(), p });
+  return p;
+}
+async function projectAtNow(root) {
   const list = await loadDir(root);
   if (!I) return { kinds: [], dir: root };
   const names = (list || []).map((e) => e.name);
