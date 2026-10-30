@@ -34,6 +34,9 @@ setting names:
 | Linked editing: a tag's closing name renamed with its opening one, in HTML, XML and JSX | | `editor.linkedEditing` |
 | Delete Duplicate Lines; Transform to Snake, Kebab, Camel or Pascal Case; Transpose Letters | palette | |
 | Search view: regular expressions, their matches found among the lines holding the expression's plain text | `.*` in Search | |
+| Find: every match a cursor | `Alt+Enter` in the find box | |
+| Font zoom with the mouse wheel | `Ctrl+wheel` | `editor.mouseWheelZoom` |
+| Outline: the active file's types, methods and fields under the Explorer's tree, the caret's lit | | |
 
 Typing also follows VS Code. Home moves between the first non-blank character and the line
 start. A closing bracket typed on a blank line outdents to its opener. Enter after `/**`

@@ -289,6 +289,16 @@
 
 /* the explorer's file tree */
 .ide-tree { flex: 1; min-height: 0; overflow: auto; outline: none; padding-bottom: 20px; }
+/* the explorer's outline under the tree: the active file's symbols, the caret's lit */
+.ide-outline { flex: 0 1 auto; max-height: 45%; min-height: 0; overflow: auto; outline: none; padding-bottom: 8px; }
+.ide-outline[hidden] { display: none; }
+.ide-outline-row { display: flex; align-items: center; gap: 6px; height: 22px; padding-left: calc(10px + var(--depth, 0) * 12px); padding-right: 8px; white-space: nowrap; cursor: pointer; color: var(--ide-fg); }
+.ide-outline-row:hover { background: var(--ide-hover); }
+.ide-outline-row.sel { background: var(--ide-sel, var(--ide-hover)); color: var(--ide-strong, var(--ide-fg)); }
+.ide-outline-row:focus-visible { outline: 1px solid var(--ide-accent); outline-offset: -1px; }
+.ide-outline-ic { flex: none; width: 16px; height: 16px; }
+.ide-outline-name { overflow: hidden; text-overflow: ellipsis; }
+.ide-outline-kind { color: var(--ide-muted); font-size: 11px; margin-left: auto; }
 .ide-tree-space { pointer-events: none; }
 .ide-tree.drop { background: color-mix(in srgb, var(--ide-accent) 12%, transparent); }
 .ide-row {

@@ -2221,6 +2221,16 @@ function codeEditor(view, file, btn, id, opts = {}) {
     show: (restyle = false) => { if (restyle || !geomCache) regeom(); overviewColors = null; minimapColors = new Map(); minimapRows = null; stickyKey = ''; rulersKey = ''; guideSnapshot = null; redraw(true); },
     // several cursors (multi-cursor.js)
     addNextMatch, selectAllMatches, addCursorLine, addCursorsAtLineEnds, clearCursors, cursorCount,
+    // every range a cursor, the last the primary (a find's matches, Alt+Enter)
+    setSelections(ranges) {
+      if (!ranges.length) return false;
+      const list = ranges.map(([a, b]) => ({ anchor: a, head: b }));
+      const primary = list.pop();
+      setCursors(list, ta.value); cursorsWhole = false;
+      ta.focus({ preventScroll: true }); ta.setSelectionRange(primary.anchor, primary.head);
+      caretInView(); sendCursor(); tell(); paintDeco();
+      return true;
+    },
     text: () => ta.value,
     // a converted extension enabled or disabled: its grammar taken up or let go, the colors
     // worked out again; a language the page parses never changes

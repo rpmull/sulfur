@@ -507,6 +507,7 @@ const SETTINGS = {
   'sulfur.languageServerSettings': { def: {}, type: 'object', title: 'Languages: Server Settings', about: 'Language-server settings, keyed by extension id (typescript, python, javascript, java, csharp, php, shell, cpp, hcl, go). Runtime prerequisites and installation are in Extensions.' },
   'editor.fontSize': { def: 13, type: 'number', min: 8, max: 40, title: 'Editor: Font Size', about: 'Controls the font size in pixels.' },
   'editor.fontFamily': { def: '', type: 'string', title: 'Editor: Font Family', about: 'The font family of the text, as CSS names it ("JetBrains Mono", "Fira Code", monospace). Empty for the theme’s own monospace font.' },
+  'editor.mouseWheelZoom': { def: false, type: 'boolean', title: 'Editor: Mouse Wheel Zoom', about: 'Zoom the editor’s font with the mouse wheel while holding Ctrl (Cmd on a Mac).' },
   'editor.fontLigatures': { def: false, type: 'boolean', title: 'Editor: Font Ligatures', about: 'Draw the font’s ligatures (=> and !== as one glyph) when the font has them.' },
   'editor.lineNumbers': { def: 'on', type: 'enum', options: [['on', 'On'], ['relative', 'Relative to the caret’s line'], ['interval', 'Every tenth line'], ['off', 'Off']], title: 'Editor: Line Numbers', about: 'How line numbers are shown in the gutter. Relative numbers count from the caret’s line, as Vim’s do; the caret’s own line keeps its absolute number.' },
   'editor.minimap.enabled': { def: true, type: 'boolean', title: 'Editor: Minimap', about: 'Show the file at a glance beside the text, a slider over the part on screen. Click or drag it to scroll.' },
@@ -656,6 +657,11 @@ export function ideStart(w, open) {
   I.offs.push(() => removeEventListener('blur', windowAway));
   const editorAway = (e) => { if (I && I.active?.ed?.dirty() && e.target.classList?.contains('code-ta') && !(e.relatedTarget && I.views.contains(e.relatedTarget))) I.autoSave.focusLost([I.active], setting('files.autoSave'), 'editor'); };
   I.views.addEventListener('focusout', editorAway);
+  I.views.addEventListener('wheel', (e) => {
+    if (!I || !setting('editor.mouseWheelZoom') || !(IS_MAC ? e.metaKey : e.ctrlKey) || !e.target.closest?.('.code-ed')) return;
+    e.preventDefault();
+    run(e.deltaY < 0 ? 'editor.action.fontZoomIn' : 'editor.action.fontZoomOut');
+  }, { passive: false });
   applySettings();
   if (standalone) {
     const follow = () => { if (setting('window.appearance') === 'system') applySettings(); };
@@ -1329,10 +1335,23 @@ function buildExplorer() {
   tree.setAttribute('role', 'tree');
   tree.setAttribute('aria-label', 'Files Explorer');
   const note = el('div', 'ide-tree-note');
-  v.body.append(treeHead.node, tree, note);
+  // the outline: the active file's types, methods and fields, the caret's lit
+  const outlineHead = sectionHead('outline', 'Outline', [btn('', 'collapse', 'Collapse Outline', () => { I.st.sections.outline = false; outlineHead.paint(); saveState(); })]);
+  const outline = Object.assign(el('div', 'ide-outline'), { tabIndex: 0 });
+  outline.setAttribute('role', 'tree');
+  outline.setAttribute('aria-label', 'Outline');
+  v.body.append(treeHead.node, tree, note, outlineHead.node, outline);
   treeHead.node.addEventListener('ide-section', () => { tree.hidden = !treeHead.open(); });
   treeHead.paint();
-  I.ex = { treeHead, tree, note, edit: null, rows: [] };
+  outlineHead.node.addEventListener('ide-section', () => { outline.hidden = !outlineHead.open(); if (outlineHead.open()) paintOutlineSoon(); });
+  outlineHead.paint();
+  outline.addEventListener('keydown', (e) => {
+    const rows = [...outline.querySelectorAll('.ide-outline-row')];
+    const at = rows.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); rows[Math.max(0, Math.min(rows.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)))]?.focus(); }
+    else if (e.key === 'Enter' && at >= 0) { e.preventDefault(); rows[at].click(); }
+  });
+  I.ex = { treeHead, tree, note, outlineHead, outline, edit: null, rows: [] };
   v.focus = () => { tree.focus(); if (!I.sel) selectRow(I.st.root, false); };
   v.acts = [];
   // a row opened on the press and release of one path, not the click: a click needs the
@@ -2520,6 +2539,42 @@ function clearBookmarks() {
 }
 
 const paintSymbolNavSoon = debounce(() => { if (I?.active?.ed) paintSymbolNav(I.active); }, 180);
+// the explorer's Outline: the active file's symbols as rows, nested as they're owned, the one
+// at the caret lit; made again only when the symbols or the caret's one changed
+const paintOutlineSoon = debounce(() => { if (I?.ex?.outline && !I.ex.outline.hidden && !I.st.side.hidden && I.st.side.view === 'explorer') paintOutline().catch((e) => log(e.message, 'Sulfur')); }, 120);
+const OUTLINE_MAX = 1500;
+async function paintOutline() {
+  const box = I.ex.outline, t = I.active;
+  if (!t?.ed) { if (box.outlineKey !== '') { box.outlineKey = ''; box.replaceChildren(el('div', 'ide-tree-note', 'Open a file to see its symbols.')); } return; }
+  if (!t.ed.ready()) return;
+  const data = await tabSymbols(t);
+  if (!I || I.active !== t || t.symbolText !== t.ed.text() || box !== I.ex?.outline) return;
+  const pos = t.ed.selection()[1];
+  const symbols = (data.symbols || []).slice(0, OUTLINE_MAX);
+  let current = null;
+  for (const s of symbols) {
+    const a = s.start ?? s.from, b = s.end ?? s.to;
+    if (a <= pos && pos <= b && (!current || b - a <= (current.end ?? current.to) - (current.start ?? current.from))) current = s;
+  }
+  const depthOf = (s) => { let d = 0; for (let o = s.owner; o && d < 20; o = o.owner) d++; return d; };
+  const key = `${t.id}|${symbols.map((s) => `${s.name}:${s.kind}:${depthOf(s)}`).join('|')}#${symbols.indexOf(current)}`;
+  if (box.outlineKey === key) return;
+  box.outlineKey = key;
+  const rows = symbols.map((s) => {
+    const row = Object.assign(el('div', 'ide-outline-row'), { tabIndex: -1 });
+    row.style.setProperty('--depth', String(depthOf(s)));
+    row.setAttribute('role', 'treeitem');
+    row.classList.toggle('sel', s === current);
+    row.append(icon(s.kind === 'type' ? 'symbolType' : s.kind === 'field' || s.kind === 'variable' ? 'symbolField' : 'symbolMethod', 'ide-outline-ic'), el('span', 'ide-outline-name', s.name), el('span', 'ide-outline-kind', s.kind || ''));
+    row.title = `${s.kind || 'symbol'} ${s.name}`;
+    row.addEventListener('click', () => { if (I?.tabs.includes(t)) { activate(t); t.ed.select(s.from, s.to); } });
+    return row;
+  });
+  if (!symbols.length) rows.push(el('div', 'ide-tree-note', t.ed.text().length > 2 * 1024 * 1024 ? 'Outline is limited to files up to 2 MB.' : 'No symbols in this file.'));
+  else if ((data.symbols || []).length > OUTLINE_MAX) rows.push(el('div', 'ide-tree-note', `${data.symbols.length - OUTLINE_MAX} more symbols not shown.`));
+  box.replaceChildren(...rows);
+  box.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+}
 async function paintSymbolNav(t) {
   if (!t.info?.ready || !t.symbolNav) return;
   const data = await tabSymbols(t);
@@ -2537,6 +2592,7 @@ async function paintSymbolNav(t) {
   const members = data.symbols.filter((s) => s.kind !== 'type' && (!s.owner || s.owner.kind === 'type') && (!type || s.owner === type));
   fill(t.symbolNav.members, members, 'Methods and fields', member);
   t.symbolNav.nav.title = t.ed.text().length > 2 * 1024 * 1024 ? 'Symbol navigation is limited to files up to 2 MB' : 'Types, methods and fields in this file';
+  paintOutlineSoon();
 }
 
 async function editorClipboard(t, action) {
@@ -2878,7 +2934,7 @@ function activate(t, focus = true) {
   // painted first: an editor in a hidden view takes no focus
   paintEditors();
   t.ed?.show();
-  if (t.ed) paintSymbolNavSoon();
+  if (t.ed) paintSymbolNavSoon(); else paintOutlineSoon();
   if (t.ed?.ready()) languages.get(t).catch((e) => log(e.message, 'Languages'));
   if (t !== was) paintRunView();
   if (focus) { drawersAway(); focusTab(t); }
@@ -2954,7 +3010,7 @@ async function closeTab(t, force = false, next = true, remember = true) {
     I.active = null;
     if (I.find?.open) closeFind(false);
     if (next && I.mru[0]) activate(I.mru[0], hadFocus || !I.root.contains(document.activeElement));
-    else { emit('activeEditor'); if (hadFocus) I.root.focus({ preventScroll: true }); }
+    else { emit('activeEditor'); paintOutlineSoon(); if (hadFocus) I.root.focus({ preventScroll: true }); }
   }
   paintEditors();
   paintProblemsSoon();
@@ -3171,6 +3227,8 @@ function buildFind() {
     else if (k === 'alt+w') { e.preventDefault(); wordB.click(); }
     else if (k === 'alt+r') { e.preventDefault(); reB.click(); }
     else if (k === 'alt+l') { e.preventDefault(); toggleFindInSelection(); }
+    // every match a cursor, as VS Code's Select All Matches
+    else if (k === 'alt+enter') { e.preventDefault(); const t = I.active; if (t?.ed && I.find.ranges.length) { t.ed.setSelections(I.find.ranges); setStatusFlash(`${I.find.ranges.length} selections`); } }
     else if (k === 'alt+p') { e.preventDefault(); caseP.click(); }
     // the searches before, as VS Code's find history
     else if ((k === 'up' || k === 'down') && (e.target === q || e.target === rq)) { e.preventDefault(); findHistoryStep(e.target, k === 'up' ? -1 : 1); }
