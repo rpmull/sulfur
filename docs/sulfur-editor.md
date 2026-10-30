@@ -31,6 +31,9 @@ setting names:
 | Font family and ligatures | | `editor.fontFamily`, `editor.fontLigatures` |
 | Auto Save after a delay, when the editor loses focus, or when the window does | | `files.autoSave`, `files.autoSaveDelay` |
 | Zen mode: the text alone | `Ctrl+K Z` | |
+| Linked editing: a tag's closing name renamed with its opening one, in HTML, XML and JSX | | `editor.linkedEditing` |
+| Delete Duplicate Lines; Transform to Snake, Kebab, Camel or Pascal Case; Transpose Letters | palette | |
+| Search view: regular expressions, their matches found among the lines holding the expression's plain text | `.*` in Search | |
 
 Typing also follows VS Code. Home moves between the first non-blank character and the line
 start. A closing bracket typed on a blank line outdents to its opener. Enter after `/**`

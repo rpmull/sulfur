@@ -512,6 +512,7 @@ const SETTINGS = {
   'editor.minimap.enabled': { def: true, type: 'boolean', title: 'Editor: Minimap', about: 'Show the file at a glance beside the text, a slider over the part on screen. Click or drag it to scroll.' },
   'editor.stickyScroll.enabled': { def: true, type: 'boolean', title: 'Editor: Sticky Scroll', about: 'Hold the lines opening the scopes the top of the view is in (a class, a function, an if) at the top as you scroll past them. Click one to go to it. Needs a language the page parses.' },
   'editor.bracketPairColorization.enabled': { def: true, type: 'boolean', title: 'Editor: Bracket Pair Colorization', about: 'Color each bracket pair by its nesting level, a closer with no opener red. Brackets in strings and comments are left alone.' },
+  'editor.linkedEditing': { def: true, type: 'boolean', title: 'Editor: Linked Editing', about: 'Rename a tag’s closing tag as you edit its opening one (and the other way), in HTML, XML and JSX. Escape unlinks the pair until the caret leaves the name.' },
   'editor.colorDecorators': { def: true, type: 'boolean', title: 'Editor: Color Decorators', about: 'Underline the colors written in stylesheets and HTML (#fff, rgb(), hsl()) in that color.' },
   'editor.cursorSurroundingLines': { def: 0, type: 'number', min: 0, max: 20, integer: true, title: 'Editor: Cursor Surrounding Lines', about: 'Lines kept visible above and below the caret as it moves (Vim’s scrolloff).' },
   'files.autoSave': { def: 'off', type: 'enum', options: [['off', 'Off'], ['afterDelay', 'After a delay'], ['onFocusChange', 'When the editor loses focus'], ['onWindowChange', 'When the window loses focus']], title: 'Files: Auto Save', about: 'Save files on their own: some time after the last edit, when their editor loses focus, or when the window does. Format On Save runs for the focus modes only, as VS Code has it.' },
@@ -557,7 +558,7 @@ const editorDisplayOptions = () => ({
   occurrencesHighlight: setting('editor.occurrencesHighlight'), selectionHighlight: setting('editor.selectionHighlight'),
   overviewRuler: setting('editor.overviewRuler.enabled'), emptySelectionClipboard: setting('editor.emptySelectionClipboard'),
   lineNumbers: setting('editor.lineNumbers'), minimap: setting('editor.minimap.enabled'), stickyScroll: setting('editor.stickyScroll.enabled'),
-  bracketPairColorization: setting('editor.bracketPairColorization.enabled'), colorDecorators: setting('editor.colorDecorators'),
+  bracketPairColorization: setting('editor.bracketPairColorization.enabled'), colorDecorators: setting('editor.colorDecorators'), linkedEditing: setting('editor.linkedEditing'),
   cursorSurroundingLines: Math.max(0, Math.min(20, Math.trunc(Number(setting('editor.cursorSurroundingLines'))) || 0)),
 });
 
@@ -2778,9 +2779,13 @@ function tabState(t, info) {
   if (!was || was.dirty !== info.dirty) t.tabEl.classList.toggle('dirty', info.dirty);
   // typing moves every diagnostic after the caret: the problems list redrawn when what it
   // shows changed (a line, a column, a message), the explorer only when the counts did
-  const shown = errorSignature(info.errors), counted = errorCounts(info.errors);
-  if (!was || t.errorsShown !== shown) { t.errorsShown = shown; paintProblemsSoon(); }
-  if (!was || t.errorsCounted !== counted) { t.errorsCounted = counted; paintTreeSoon(); }
+  // (the editor keeps the same list between frames while the problems and the text hold, so a
+  // caret move costs no signature of every problem)
+  if (!was || was.errors !== info.errors) {
+    const shown = errorSignature(info.errors), counted = errorCounts(info.errors);
+    if (!was || t.errorsShown !== shown) { t.errorsShown = shown; paintProblemsSoon(); }
+    if (!was || t.errorsCounted !== counted) { t.errorsCounted = counted; paintTreeSoon(); }
+  }
   if (t === I.active) paintStatus();
   if (t === I.active) navNote(t);
   if (t === I.active) paintSymbolNavSoon();
@@ -3458,6 +3463,22 @@ const LINE_CMDS = {
   upper: (ed, text, s, e) => { if (s !== e) ed.edit(s, e, text.slice(s, e).toUpperCase(), s, e); },
   lower: (ed, text, s, e) => { if (s !== e) ed.edit(s, e, text.slice(s, e).toLowerCase(), s, e); },
   title: (ed, text, s, e) => { if (s !== e) ed.edit(s, e, text.slice(s, e).toLowerCase().replace(/(^|[^\p{L}\p{N}'])(\p{L})/gu, (m, p1, c) => p1 + c.toUpperCase()), s, e); },
+  deleteDuplicates: (ed, text, s, e) => {
+    let [a, b] = lineSpan(text, s, e);
+    if (s === e) { a = 0; b = text.length; }
+    const seen = new Set();
+    const next = text.slice(a, b).split('\n').filter((l) => !seen.has(l) && seen.add(l)).join('\n');
+    if (next !== text.slice(a, b)) ed.edit(a, b, next, a, a + next.length);
+  },
+  snake: (ed, text, s, e) => caseCmd(ed, text, s, e, (w) => w.map((x) => x.toLowerCase()).join('_')),
+  kebab: (ed, text, s, e) => caseCmd(ed, text, s, e, (w) => w.map((x) => x.toLowerCase()).join('-')),
+  camel: (ed, text, s, e) => caseCmd(ed, text, s, e, (w) => w.map((x, i) => (i ? x[0].toUpperCase() + x.slice(1).toLowerCase() : x.toLowerCase())).join('')),
+  pascal: (ed, text, s, e) => caseCmd(ed, text, s, e, (w) => w.map((x) => x[0].toUpperCase() + x.slice(1).toLowerCase()).join('')),
+  // the letters either side of the caret swapped, as Emacs's and macOS's Ctrl+T
+  transpose: (ed, text, s, e) => {
+    if (s !== e || s === 0 || s >= text.length || text[s - 1] === '\n' || text[s] === '\n') return;
+    ed.edit(s - 1, s + 1, text[s] + text[s - 1], s + 1);
+  },
   joinLines: (ed, text, s, e) => {
     const [a, b0] = lineSpan(text, s, e);
     let b = b0;
@@ -3466,6 +3487,16 @@ const LINE_CMDS = {
     ed.edit(a, b, next, a + next.length);
   },
 };
+// a selection (or the word at the caret) as words, for the case transforms: split at
+// spaces, dashes, underscores and where a lowercase letter meets an uppercase one
+function caseCmd(ed, text, s, e, join) {
+  if (s === e) { const t = I.active.ed.text(); const w = /[\p{L}\p{N}_]/u; let a = s, b = s; while (a > 0 && w.test(t[a - 1])) a--; while (b < t.length && w.test(t[b])) b++; s = a; e = b; }
+  if (s === e) return;
+  const words = text.slice(s, e).replace(/(\p{Ll}|\p{N})(\p{Lu})/gu, '$1 $2').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (!words.length) return;
+  const next = join(words);
+  if (next !== text.slice(s, e)) ed.edit(s, e, next, s, s + next.length);
+}
 function sortLines(ed, text, s, e, dir) {
   let [a, b] = lineSpan(text, s, e);
   if (s === e) { a = 0; b = text.length; }
@@ -3834,6 +3865,12 @@ function registerCommands() {
   L('editor.action.transformToLowercase', 'Transform to Lowercase', 'lower', '');
   L('editor.action.transformToTitlecase', 'Transform to Title Case', 'title', '');
   L('editor.action.joinLines', 'Join Lines', 'joinLines', '');
+  L('editor.action.removeDuplicateLines', 'Delete Duplicate Lines', 'deleteDuplicates', '');
+  L('editor.action.transformToSnakecase', 'Transform to Snake Case', 'snake', '');
+  L('editor.action.transformToKebabcase', 'Transform to Kebab Case', 'kebab', '');
+  L('editor.action.transformToCamelcase', 'Transform to Camel Case', 'camel', '');
+  L('editor.action.transformToPascalcase', 'Transform to Pascal Case', 'pascal', '');
+  L('editor.action.transposeLetters', 'Transpose Letters', 'transpose', IS_MAC ? 'meta+t' : '');
   for (const id of ['editor.action.duplicateSelection', 'editor.action.sortLinesAscending', 'editor.action.sortLinesDescending', 'editor.action.transformToUppercase',
     'editor.action.transformToLowercase', 'editor.action.transformToTitlecase', 'editor.action.joinLines', 'editor.action.trimTrailingWhitespace']) I.commands.get(id).when = hasEd;
   C('editor.action.marker.next', 'Go to Next Problem (Error, Warning, Info)', () => nextProblem(1), { key: 'f8', when: hasEd, category: 'Go' });
@@ -8185,6 +8222,33 @@ async function gitClone() {
   notify('info', `Cloned into ${name.trim()}.`);
 }
 
+// the longest plain text a regular expression must contain, for a host's substring search: a
+// run of ordinary characters, less one made optional by a ? * or {, none at all across an |
+function regexLiteral(source) {
+  if (/(^|[^\\])\|/.test(source)) return '';
+  let best = '', run = '';
+  const flush = () => { if (run.length > best.length) best = run; run = ''; };
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (c === '\\') {
+      const n = source[++i] ?? '';
+      if (/[dDwWsSbBntrfv0-9pPuxck]/.test(n)) flush(); else run += n;
+    } else if (c === '[') {
+      // a class matches one of many: a boundary, its contents skipped
+      flush();
+      for (i++; i < source.length && source[i] !== ']'; i++) if (source[i] === '\\') i++;
+    } else if (c === '(') {
+      flush();
+      // a group's (?: (?= (?! (?<name> opener is no text
+      if (source[i + 1] === '?') { i += 2; if (source[i] === '<' && !/[=!]/.test(source[i + 1] || '')) i = source.indexOf('>', i); }
+    } else if ('?*{'.includes(c)) { run = run.slice(0, -1); flush(); if (c === '{') { const end = source.indexOf('}', i); if (end > i) i = end; } }
+    else if ('^$.+)|]}'.includes(c)) flush();
+    else run += c;
+  }
+  flush();
+  return best;
+}
+
 // --- search: the workspace's text on every online host ---------------------------------------
 // the hosts' own search, case-blind substrings with a name glob; case and whole
 // words narrowed here, so what's offered is only what's kept
@@ -8202,8 +8266,8 @@ function buildSearch() {
     b.addEventListener('click', () => { S[key] = !S[key]; b.classList.toggle('on', S[key]); b.setAttribute('aria-pressed', String(S[key])); schedule(); });
     return b;
   };
-  const S = { caseS: false, word: false, results: [], open: new Set(), gen: 0 };
-  field.append(q, opt('Aa', 'Match Case', 'caseS'), opt('ab', 'Match Whole Word', 'word', 'ide-opt-word'));
+  const S = { caseS: false, word: false, re: false, results: [], open: new Set(), gen: 0 };
+  field.append(q, opt('Aa', 'Match Case', 'caseS'), opt('ab', 'Match Whole Word', 'word', 'ide-opt-word'), opt('.*', 'Use Regular Expression', 're'));
   const more = btn('ide-search-more', 'more', 'Toggle Search Details', () => { details.hidden = !details.hidden; more.classList.toggle('on', !details.hidden); });
   const top = el('div', 'ide-search-top');
   top.append(field, more);
@@ -8250,11 +8314,17 @@ function buildSearch() {
     const includes = excludeMatcher(include);
     const skip = excluded();
     const exGlobs = excludeMatcher(exc.value);
-    const re = literalSearch(query, { caseSensitive: S.caseS, wholeWord: S.word });
+    // a regular expression's matches are found here among the lines the hosts send for its
+    // longest plain text (the hosts search plain text alone)
+    let re, hostQuery = query;
+    if (S.re) {
+      try { re = new RegExp(S.word ? `(?<![\\p{L}\\p{N}\\p{M}_])(?:${query})(?![\\p{L}\\p{N}\\p{M}_])` : query, S.caseS ? 'gu' : 'giu'); } catch { S.results = []; S.query = query; S.failed = 0; paint(); summary.textContent = 'The regular expression is not valid.'; return; }
+      hostQuery = regexLiteral(query);
+    } else re = literalSearch(query, { caseSensitive: S.caseS, wholeWord: S.word });
     const root = I.st.root;
     const workspace = wsKey();
     const where = isHomeLoc() ? homeOnline().map((h) => [h, homeAt(h)]) : [[locOf().host, apiLoc()]];
-    const got = await Promise.all(where.map(([h, at]) => filesCall(at, 'search', { signal: controller.signal }, { path: root, query, content: 'true', skip: searchSkip(), ...(glob ? { glob } : {}) })
+    const got = await Promise.all(where.map(([h, at]) => filesCall(at, 'search', { signal: controller.signal }, { path: root, query: hostQuery, content: 'true', skip: searchSkip(), ...(glob ? { glob } : {}) })
       .then((b) => ({ h, b }), () => null)));
     if (I !== state || I.search?.S !== S || workspace !== wsKey() || gen !== S.gen) return;
     S.controller = null;
@@ -8284,7 +8354,7 @@ function buildSearch() {
     const n = S.results.reduce((k, r) => k + r.matches.length, 0);
     summary.textContent = !q.value.trim() ? '' : S.allFailed ? 'Search failed: no host answered. Check the connection and try again.' : n ? `${n} result${n === 1 ? '' : 's'} in ${S.results.length} file${S.results.length === 1 ? '' : 's'}${S.truncated ? ' (the hosts stopped early: narrow the search)' : ''}` : 'No results found. Review your settings for configured exclusions.';
     if (S.failed && !S.allFailed) summary.textContent += ` (${S.failed} host${S.failed === 1 ? '' : 's'} unavailable)`;
-    summary.title = 'Each host reports at most 5 matching lines per file.';
+    summary.title = S.re ? `Each host reports at most 5 lines per file holding the expression's plain text${regexLiteral(S.query || '') ? ` (${regexLiteral(S.query || '')})` : ''}; the expression is matched among those.` : 'Each host reports at most 5 matching lines per file.';
     const rows = [];
     const rel = (p) => (under(p, I.st.root) ? p.slice(I.st.root.length + 1) : p);
     for (const r of S.results) {

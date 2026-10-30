@@ -36,6 +36,7 @@ import { stickyLines, STICKY_MAX } from './sticky-scroll.js';
 import { minimapLayout, minimapRuns, minimapScrollFor } from './minimap.js';
 import { lineNumberLabels } from './line-numbers.js';
 import { colorLiterals, COLOR_LANGS } from './color-decorators.js';
+import { linkedTagRange } from './linked-editing.js';
 
 // --- code editor ------------------------------------------------------------------
 // a share's text or code file in a tab of its own, joined to the file's live
@@ -878,6 +879,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     if (cursors.length && cursorsText === text) {
       const focused = document.activeElement === ta;
       for (const c of cursors) {
+        if (c.linked) { if (c.to >= drawn.from && c.from <= drawn.to && c.to > c.from) marks.push({ from: c.from, to: c.to, wrap: (raw) => `<mark class="linked">${esc(raw)}</mark>` }); continue; }
         const a = Math.min(c.anchor, c.head), b = Math.max(c.anchor, c.head);
         if (b < drawn.from || a > drawn.to) continue;
         if (b > a) marks.push({ from: a, to: b, wrap: (raw) => `<mark class="sel">${esc(raw)}</mark>` });
@@ -1198,7 +1200,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
   // --- the host told: state, caret and errors, once a frame at most ---
   let tellFrame = 0;
   // decorations follow the caret; drawn already this frame if the text was
-  const tell = () => { if (!tellFrame) tellFrame = requestAnimationFrame((stamp) => { tellFrame = 0; if (closed) return; tw?.check(); if (stamp !== decoStamp) paintDeco(); opts.onState?.(info()); }); };
+  const tell = () => { if (!tellFrame) tellFrame = requestAnimationFrame((stamp) => { tellFrame = 0; if (closed) return; tw?.check(); linkedUpdate(); if (stamp !== decoStamp) paintDeco(); opts.onState?.(info()); }); };
   let indexedText, lineStarts = [];
   const firstAbove = (p) => { let lo = 0, hi = lineStarts.length; while (lo < hi) { const mid = (lo + hi) >>> 1; if (lineStarts[mid] <= p) lo = mid + 1; else hi = mid; } return lo; };
   // the line starts kept for the text: an edit's lines found again where it changed, the
@@ -1270,17 +1272,20 @@ function codeEditor(view, file, btn, id, opts = {}) {
     for (let i = from; i < to; i++) n = text.charCodeAt(i) === 9 ? n + tabSize - n % tabSize : n + 1;
     return n;
   };
+  // the problems as the host has them, made once per text and list rather than every frame
+  let infoErrors = { errs: null, text: null, list: [] };
   function info() {
     const text = ta.value;
     const s = ta.selectionStart;
+    if (infoErrors.errs !== errs || infoErrors.text !== text) infoErrors = { errs, text, list: errs.map((x) => ({ from: x.from, to: x.to, what: x.what, source: x.source, code: x.code, severity: diagnosticSeverity(x), line: lineAt(text, x.from), col: x.from - text.lastIndexOf('\n', x.from - 1) })) };
     // line and column the caret's, as VS Code's status bar has them
     const e = headOf(selNow());
     const u = unit();
     return {
       ready, dirty: dirty(), readOnly: ta.readOnly, state: stateEl.textContent, bad: stateEl.classList.contains('bad'),
       lang: lang.hl, line: lineAt(text, e), col: e - text.lastIndexOf('\n', e - 1), sel: ta.selectionEnd - s,
-      indent: u === '\t' ? 'tab' : u.length, eol: eolMode, length: text.length, cursors: cursors.length,
-      errors: errs.map((x) => ({ from: x.from, to: x.to, what: x.what, source: x.source, code: x.code, severity: diagnosticSeverity(x), line: lineAt(text, x.from), col: x.from - text.lastIndexOf('\n', x.from - 1) })),
+      indent: u === '\t' ? 'tab' : u.length, eol: eolMode, length: text.length, cursors: cursorCount(),
+      errors: infoErrors.list,
       people: people.filter((p) => (me ? p.id !== me : p.name !== name)),
     };
   }
@@ -2010,7 +2015,38 @@ function codeEditor(view, file, btn, id, opts = {}) {
   let cursors = [], cursorsText = null, cursorsWhole = false, replicaShift = 0;
   const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || '');
   function setCursors(list, text) { cursors = list.length ? normalizeCursors(list) : []; cursorsText = cursors.length ? text : null; }
-  function clearCursors() { if (!cursors.length) return; setCursors([], null); cursorsWhole = false; paintDeco(); tell(); }
+  const cursorCount = () => cursors.filter((c) => !c.linked).length;
+  function clearCursors() {
+    if (!cursors.length) return;
+    // a linked tag name let go stays unlinked until the caret leaves it
+    if (cursors.some((c) => c.linked) && linkedAt !== null) linkedOff = linkedAt;
+    setCursors([], null); cursorsWhole = false; paintDeco(); tell();
+  }
+  // --- linked editing (linked-editing.js): the caret in a tag's name, its partner's name a
+  // linked cursor, so a rename types into both; drawn as an underline rather than a caret ---
+  const LINKED = /^(html|xml|javascript:jsx)/;
+  let linkedAt = null, linkedOff = null;
+  function linkedUpdate() {
+    const display = opts.display?.() || {};
+    const text = ta.value;
+    const parser = display.linkedEditing !== false && ready && !ta.readOnly && LINKED.test(lang.check) && text.length <= HL_MAX && parserNow(lang.check);
+    const linkedNow = cursors.length === 1 && !!cursors[0].linked && cursorsText === text;
+    if (!parser) { if (linkedNow) setCursors([], null); return; }
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    if (s !== e || (cursors.length && !linkedNow)) { if (linkedNow) { setCursors([], null); paintDeco(); } return; }
+    // the tree as far as the caret: parsed already for the view when the caret's on screen
+    const link = linkedTagRange(syntax.parseTo(parser, text, Math.min(text.length, s + 1), 0).tree, text, s);
+    if (!link || linkedOff === link.from) {
+      if (!link) { linkedOff = null; linkedAt = null; }
+      if (linkedNow) { setCursors([], null); paintDeco(); }
+      return;
+    }
+    linkedAt = link.from;
+    const at = link.partner.from + (s - link.from);
+    if (linkedNow && cursors[0].head === at && cursors[0].from === link.partner.from && cursors[0].to === link.partner.to) return;
+    setCursors([{ anchor: at, head: at, linked: true, from: link.partner.from, to: link.partner.to }], text);
+    paintDeco();
+  }
   // the browser's edit at the primary (historyText → ta.value) made at the others too
   function replicate() {
     const before = historyText, after = ta.value;
@@ -2022,6 +2058,8 @@ function codeEditor(view, file, btn, id, opts = {}) {
     ta.value = next;
     ta.setSelectionRange(r.primary[0], r.primary[1]);
     replicaShift = r.primary[0] - was;
+    // a linked name stays linked through the edit, its range found again at the next frame
+    if (cursors.every((c) => c.linked)) for (const c of r.cursors) c.linked = true;
     setCursors(r.cursors, next);
   }
   // the primary made one of the others, a new selection taking its place
@@ -2182,8 +2220,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     // a read of computed style forcing the whole page's style to be worked out mid-switch
     show: (restyle = false) => { if (restyle || !geomCache) regeom(); overviewColors = null; minimapColors = new Map(); minimapRows = null; stickyKey = ''; rulersKey = ''; guideSnapshot = null; redraw(true); },
     // several cursors (multi-cursor.js)
-    addNextMatch, selectAllMatches, addCursorLine, addCursorsAtLineEnds, clearCursors,
-    cursorCount: () => cursors.length,
+    addNextMatch, selectAllMatches, addCursorLine, addCursorsAtLineEnds, clearCursors, cursorCount,
     text: () => ta.value,
     // a converted extension enabled or disabled: its grammar taken up or let go, the colors
     // worked out again; a language the page parses never changes

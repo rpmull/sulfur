@@ -473,6 +473,8 @@
 .code-deco-marks mark.word { background: var(--ide-word-hl, color-mix(in srgb, var(--ide-fg, var(--fg)) 14%, transparent)); }
 .code-deco-marks mark.bracket { border-radius: 0; background: var(--ide-bracket, rgb(0 100 0 / 0.1)); box-shadow: inset 0 0 0 1px var(--ide-bracket-border, #888); }
 .code-deco-marks mark.sel { background: var(--ide-ed-sel, color-mix(in srgb, var(--accent) 30%, var(--card))); }
+/* a tag name linked to the one being edited (linked-editing.js) */
+.code-deco-marks mark.linked { border-bottom: 1px dotted var(--ide-fg, var(--fg)); border-radius: 0; background: color-mix(in srgb, var(--ide-fg, var(--fg)) 8%, transparent); }
 /* a color written in a stylesheet, shown under itself */
 .code-deco-marks mark.swatch { border-bottom: 3px solid var(--swatch); border-radius: 0; }
 /* the other cursors (multi-cursor.js): a bar at each, blinking as the textarea's own */

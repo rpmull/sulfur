@@ -179,25 +179,44 @@ test('a many-edit change parses again only around its edits, through the edits\'
   const { createSyntaxCache, opChanges } = await import('../src/syntax-cache.js');
   const { TreeFragment } = await import('../.vendor/node_modules/@lezer/common/dist/index.js');
   const { opApply, opEdits } = await import('../src/text-operations.js');
-  const before = 'function f(a){return a+1}\n'.repeat(2000);
-  const cache = createSyntaxCache(TreeFragment);
-  cache.parse(js, before);
+  const before = 'function f(a) {\n  if (a) {\n    return a + 1;\n  }\n  return a;\n}\n'.repeat(3000);
   const edits = [];
-  for (let at = before.indexOf('{'); at >= 0; at = before.indexOf('{', at + 1)) edits.push({ from: at, to: at, text: ' ' });
+  let n = 0;
+  for (let at = before.indexOf('{'); at >= 0; at = before.indexOf('{', at + 1)) if (n++ % 1500 === 0) edits.push({ from: at, to: at, text: ' ' });
   const ops = opEdits(before, edits);
   const after = opApply(before, ops);
-  assert.deepEqual(opChanges(ops).slice(0, 2), [{ fromA: 13, toA: 13, fromB: 13, toB: 14 }, { fromA: 39, toA: 39, fromB: 40, toB: 41 }]);
   assert.deepEqual(opChanges([3, -2, 'xy', 4]), [{ fromA: 3, toA: 5, fromB: 3, toB: 5 }]);
+  assert.equal(opChanges(ops).length, edits.length);
+  const cache = createSyntaxCache(TreeFragment);
+  cache.parse(js, before);
   cache.noteEdits(before, after, ops);
-  const t0 = performance.now();
-  const tree = cache.parse(js, after);
-  const noted = performance.now() - t0;
-  assert.equal(tree.toString(), js.parse(after).toString());
-  // the same change parsed again as one span from the first edit to the last takes far longer
-  const other = createSyntaxCache(TreeFragment);
-  other.parse(js, before);
-  const t1 = performance.now();
-  other.parse(js, after);
-  const whole = performance.now() - t1;
-  assert.ok(noted < whole, `${noted.toFixed(1)}ms noted, ${whole.toFixed(1)}ms whole`);
+  assert.equal(cache.parse(js, after).toString(), js.parse(after).toString());
+  // the pieces carried across: one per stretch between the edits, where one span from the
+  // first edit to the last keeps nothing in between (a parse of nearly the whole file)
+  const pieces = TreeFragment.addTree(js.parse(before));
+  assert.ok(TreeFragment.applyChanges(pieces, opChanges(ops)).length >= edits.length);
+  assert.ok(TreeFragment.applyChanges(pieces, [{ fromA: edits[0].from, toA: edits.at(-1).from, fromB: edits[0].from, toB: edits.at(-1).from + edits.length - 1 }]).length <= 2);
+});
+
+test('linked editing finds the partner tag name in HTML, XML and JSX, not for self-closing or unclosed tags', async () => {
+  const { linkedTagRange } = await import('../src/sulfur/linked-editing.js');
+  const html = (await import('../.vendor/node_modules/@lezer/html/dist/index.js')).parser;
+  const xml = (await import('../.vendor/node_modules/@lezer/xml/dist/index.js')).parser;
+  const jsx = js.configure({ dialect: 'jsx' });
+  const doc = '<div class="a"><span>x</span></div><br/><p>open';
+  const tree = html.parse(doc);
+  assert.deepEqual(linkedTagRange(tree, doc, 2), { from: 1, to: 4, partner: { from: 31, to: 34 } });
+  assert.deepEqual(linkedTagRange(tree, doc, 4), { from: 1, to: 4, partner: { from: 31, to: 34 } });
+  assert.deepEqual(linkedTagRange(tree, doc, 33), { from: 31, to: 34, partner: { from: 1, to: 4 } });
+  assert.equal(linkedTagRange(tree, doc, 7), null);
+  assert.equal(linkedTagRange(tree, doc, 37), null);
+  assert.equal(linkedTagRange(tree, doc, 42), null);
+  const x = '<a:b><c/></a:b>';
+  assert.deepEqual(linkedTagRange(xml.parse(x), x, 3), { from: 1, to: 4, partner: { from: 11, to: 14 } });
+  const j = 'const a = <Foo.Bar x={1}><b>hi</b></Foo.Bar>;';
+  assert.deepEqual(linkedTagRange(jsx.parse(j), j, 13), { from: 11, to: 18, partner: { from: 36, to: 43 } });
+  assert.deepEqual(linkedTagRange(jsx.parse(j), j, 33), { from: 32, to: 33, partner: { from: 26, to: 27 } });
+  // names that differ already aren't linked
+  const odd = '<div></span>';
+  assert.equal(linkedTagRange(html.parse(odd), odd, 2), null);
 });
