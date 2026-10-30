@@ -2493,9 +2493,15 @@ function workspaceBookmarks() {
   return list.filter((bookmark) => bookmark?.rel && sameLoc(bookmark.loc, locOf()) && under(bookmark.rel, I.st.root));
 }
 function tabBookmarks(t) { return (I.st.bookmarks || []).filter((b) => b.rel === t.rel && sameLoc(b.loc, t.loc)); }
+// (the caret's line as the editor reports it: counting the newlines before the caret cost a
+// pass over the text on every caret move, in the toolbar's paint)
 function activeBookmark() {
   const t = I?.active;
-  return t?.rel && t.ed && tabBookmarks(t).find((bookmark) => bookmark.line === t.ed.text().slice(0, t.ed.selection()[0]).split('\n').length);
+  if (!t?.rel || !t.ed) return undefined;
+  const bookmarks = tabBookmarks(t);
+  if (!bookmarks.length) return undefined;
+  const line = t.info?.line || t.ed.text().slice(0, t.ed.selection()[0]).split('\n').length;
+  return bookmarks.find((bookmark) => bookmark.line === line);
 }
 function updateBookmarks(t) {
   if (!t.rel || !t.ed?.ready()) return;
