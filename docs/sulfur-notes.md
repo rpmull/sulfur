@@ -17,10 +17,14 @@ files into it.
 
 ## Writing notes
 
-Markdown opens rendered. Click a block to edit its source in place; `Escape`
-drops the edit, `Ctrl+Enter` or clicking away keeps it, and **+ add a block**
-adds one at the end. `Ctrl+Shift+V` shows the whole source instead, and Sulfur
-remembers which you chose. Task list boxes can be ticked in the rendered note.
+Markdown opens rendered, edited as in Obsidian: click a block (or below the last one) to
+write its source in place, the rest staying rendered. The keys move through the note as
+through one text: `Up` and `Down` at a block's first or last line go to the block before or
+after, `Enter` on an empty last line ends the block and begins the next, `Backspace` in an
+empty block takes it out, and `Enter` in a list carries the list on (numbered on, a task's
+box with it); an empty item ends the list. `Escape` drops an edit, `Ctrl+Enter` or clicking
+away keeps it. `Ctrl+Shift+V` shows the whole source instead, and Sulfur remembers which you
+chose. Task list boxes can be ticked in the rendered note.
 
 Edits reach the disk when you save (`Ctrl+S`), unless someone else has the note
 open with you; see [the editor](sulfur-editor.md).

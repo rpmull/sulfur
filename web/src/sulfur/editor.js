@@ -1359,7 +1359,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     if (seq !== mdSeq || !rendered || mdEditing || ta.value !== text) return;
     const top = mdView.scrollTop;
     const edit = canWrite();
-    mdView.replaceChildren(...blocks.map((b) => {
+    const nodes = blocks.map((b) => {
       const d = el('div', 'md-block');
       renderMd(d, b.raw.replace(/\n+$/, ''), false, b.html);
       if (edit) {
@@ -1374,21 +1374,39 @@ function codeEditor(view, file, btn, id, opts = {}) {
         });
       }
       return d;
-    }));
-    if (!blocks.length) mdView.append(el('div', 'md-empty', 'empty'));
-    if (edit) {
-      const add = Object.assign(el('button', 'md-add', '+ add a block'), { type: 'button' });
-      add.addEventListener('click', () => {
-        const t = ta.value;
-        const gap = !t || t.endsWith('\n\n') ? '' : t.endsWith('\n') ? '\n' : '\n\n';
-        editBlock(add, { from: t.length, raw: '', gap });
-      });
-      mdView.append(add);
-    }
+    });
+    mdView.replaceChildren(...nodes);
+    mdView.mdBlocks = blocks; mdView.mdNodes = nodes;
+    // nothing yet: a word of where to begin; a click on it, or below the last block, writes
+    if (!blocks.length) mdView.append(el('div', 'md-empty', edit ? 'Click to start writing' : 'empty'));
     mdView.scrollTop = top;
     // links, images and embeds made the host's: found as files, opened where they are
     opts.markdownView?.(mdView, file);
   }
+  // a new block after block i (or at the end): edited in place, its blank lines put around it
+  function newBlockAfter(i) {
+    const t = ta.value, blocks = mdView.mdBlocks || [], nodes = mdView.mdNodes || [];
+    const prev = i >= 0 ? blocks[i] : null;
+    const from = prev ? Math.min(t.length, prev.from + prev.raw.length) : t.length;
+    const before = t.slice(0, from);
+    const gap = !before || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+    const tail = from < t.length && t[from] !== '\n' ? '\n\n' : '\n';
+    const place = el('div', 'md-block');
+    const after = prev ? nodes[i] : null;
+    if (after?.parentNode === mdView) after.after(place); else { mdView.querySelector('.md-empty')?.remove(); mdView.append(place); }
+    editBlock(place, { from, raw: '', gap, tail }, 'end');
+  }
+  // the block at an index edited, after a repaint, with the caret at its start or end
+  function editBlockAt(i, caret) {
+    const d = mdView.mdNodes?.[i], b = mdView.mdBlocks?.[i];
+    if (d && b) editBlock(d, b, caret);
+  }
+  mdView.addEventListener('click', (e) => {
+    if (mdEditing || !canWrite() || !rendered) return;
+    if (e.target !== mdView && !e.target.classList?.contains('md-empty')) return;
+    if (String(getSelection?.() || '')) return;
+    newBlockAfter((mdView.mdBlocks?.length || 0) - 1);
+  });
   // a block painted later (its html still on its way) given the same
   mdView.addEventListener('md-painted', (e) => { if (rendered && e.target !== mdView && mdView.contains(e.target)) opts.markdownView?.(e.target, file); });
   // an image pasted into a note: saved by the host (into the notes' images), its link typed in
@@ -1426,17 +1444,26 @@ function codeEditor(view, file, btn, id, opts = {}) {
     ta.setRangeText(on ? 'x' : ' ', at, at + 1);
     ta.dispatchEvent(new Event('input'));
   }
-  function editBlock(d, b) {
+  // A block's source edited where it stands, as Obsidian's editor shows the paragraph being
+  // typed as its source and the rest rendered. The keys move through the note as through one
+  // text: Up and Down at a block's first or last line go to the block before or after, Enter on
+  // an empty last line ends the block and begins the next, Backspace in an empty block takes it
+  // out, and Enter in a list carries the list on. caret: where to put it, 'start' or 'end'
+  function editBlock(d, b, caret = null) {
     if (mdEditing) return;
     const src = b.raw.replace(/\n+$/, '');
-    const tail = b.raw.slice(src.length) || (b.raw ? '' : '\n');
+    const tail = b.tail ?? (b.raw.slice(src.length) || (b.raw ? '' : '\n'));
     const box = Object.assign(document.createElement('textarea'), { className: 'md-edit', value: src, spellcheck: true });
     const grow = () => { box.style.height = 'auto'; box.style.height = `${box.scrollHeight + 2}px`; };
     d.replaceWith(box);
     mdEditing = { box };
     grow();
     box.focus();
-    const done = (keep) => {
+    if (caret === 'start') box.setSelectionRange(0, 0);
+    else if (caret === 'end') box.setSelectionRange(box.value.length, box.value.length);
+    const index = () => (mdView.mdBlocks || []).indexOf(b);
+    // the note painted again once the edit's in; then: what to do with the painted note
+    const done = (keep, then = null) => {
       if (mdEditing?.box !== box) return;
       mdEditing = null;
       if (keep && box.value !== src) {
@@ -1450,15 +1477,49 @@ function codeEditor(view, file, btn, id, opts = {}) {
           ta.dispatchEvent(new Event('input'));
         }
       }
-      paintMd();
+      paintMd().then(() => { if (then && rendered && !closed && !mdEditing) then(); });
     };
     box.addEventListener('input', grow);
     box.addEventListener('paste', (e) => { pasteImage(e, (link) => { box.setRangeText(link, box.selectionStart, box.selectionEnd, 'end'); grow(); }); });
     box.addEventListener('blur', () => done(true));
+    const lineOfCaret = () => { const v = box.value, s = box.selectionStart; const a = v.lastIndexOf('\n', s - 1) + 1; const e = v.indexOf('\n', s); return { a, e: e < 0 ? v.length : e, line: v.slice(a, e < 0 ? v.length : e) }; };
     box.addEventListener('keydown', (e) => {
       const mod = e.ctrlKey || e.metaKey;
+      const s = box.selectionStart, end = box.selectionEnd, v = box.value;
+      const collapsed = s === end;
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(false); mdView.focus(); }
       else if (mod && e.key === 'Enter') { e.preventDefault(); done(true); mdView.focus(); }
+      // the block before or after, from the first or last line
+      else if (e.key === 'ArrowUp' && collapsed && !mod && !e.shiftKey && !e.altKey && v.lastIndexOf('\n', s - 1) < 0 && index() > 0) { e.preventDefault(); const i = index(); done(true, () => editBlockAt(i - 1, 'end')); }
+      else if (e.key === 'ArrowDown' && collapsed && !mod && !e.shiftKey && !e.altKey && v.indexOf('\n', end) < 0 && index() >= 0 && index() < (mdView.mdBlocks?.length || 0) - 1) {
+        e.preventDefault();
+        const i = index(), kept = !!v.trim();
+        done(true, () => editBlockAt(kept ? i + 1 : i, 'start'));
+      }
+      // an empty block taken out, the one before edited on
+      else if (e.key === 'Backspace' && !v && index() > 0) { e.preventDefault(); const i = index(); done(true, () => editBlockAt(i - 1, 'end')); }
+      else if (e.key === 'Enter' && collapsed && !mod && !e.shiftKey && !e.altKey) {
+        const { line } = lineOfCaret();
+        // an empty last line: the block ends here, the next begins
+        if (s === v.length && v.endsWith('\n') && v.trim()) {
+          e.preventDefault();
+          box.value = v.replace(/\n+$/, '');
+          const i = index();
+          const existing = i >= 0;
+          done(true, () => newBlockAfter(existing ? i : (mdView.mdBlocks?.length || 0) - 1));
+          return;
+        }
+        // a list carried on: the next item's marker, a number one up; an empty item ends the list
+        const m = line.match(/^(\s*)([-*+]|\d+[.)])(\s+\[[ xX]\])?\s+(.*)$/);
+        if (m && s === lineOfCaret().e) {
+          e.preventDefault();
+          if (!m[4]) { box.setRangeText('', lineOfCaret().a, s, 'end'); grow(); return; }
+          const marker = /\d/.test(m[2]) ? `${Number.parseInt(m[2], 10) + 1}${m[2].slice(-1)}` : m[2];
+          const insert = `\n${m[1]}${marker}${m[3] ? ' [ ]' : ''} `;
+          if (!document.execCommand('insertText', false, insert)) box.setRangeText(insert, s, s, 'end');
+          grow();
+        }
+      }
       // a tab character typed in, focus staying in the block
       else if (e.key === 'Tab' && !mod && !e.altKey && !e.shiftKey) {
         e.preventDefault();
@@ -1629,15 +1690,20 @@ function codeEditor(view, file, btn, id, opts = {}) {
     const col = columnOf(text, lineStarts[line], end);
     const y = padY + line * lh;
     const x = metrics.gutter + padX + col * cw;
-    const { top, left, width, gutter: gw } = metrics;
+    const { top, left } = metrics;
+    // the pane's size read now when it hasn't been measured yet (a jump into a tab just
+    // shown): with a width of zero the target was scrolled off the left edge
     const height = metrics.height || scroller.clientHeight;
+    const width = metrics.width || scroller.clientWidth, gw = metrics.gutter || gutter.offsetWidth;
     // lines kept between the caret and the view's edges (editor.cursorSurroundingLines)
     const keep = Math.min(Math.max(0, Math.floor(height / lh / 2) - 1), (opts.display?.() || {}).cursorSurroundingLines || 0) * lh;
     const out = y < top + keep || y + lh > top + height - keep;
     if (center && out) scrollTo(y - height / 2);
     else if (y < top + keep) scrollTo(y - keep);
     else if (y + lh > top + height - keep) scrollTo(y + lh - height + 4 + keep);
-    if (x < left + gw) scrollTo(metrics.top, x - gw - cw * 4);
+    // a jump (a definition, a find) shows its line from the start when the place fits that way
+    if (center && x - gw - padX < width - cw * 4) scrollTo(metrics.top, 0);
+    else if (x < left + gw) scrollTo(metrics.top, x - gw - cw * 4);
     else if (x > left + width - cw * 2) scrollTo(metrics.top, x - width + cw * 4);
   }
 
