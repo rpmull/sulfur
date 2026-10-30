@@ -64,15 +64,21 @@ export function rebaseHighlightRanges(before, after, ranges, change = null) {
   const end = before.length - tail, added = after.slice(from, after.length - tail), delta = after.length - before.length;
   const identifier = /^@?[$\p{L}_][$\p{L}\p{N}\p{M}_]*$/u;
   const continuation = /^[$\p{L}\p{N}\p{M}_]*$/u.test(added);
-  const out = [];
-  for (const range of ranges) {
+  // the ranges ending before the edit stay as they are: copied whole, by bisection, rather
+  // than looked at one by one (a long file's tokens are mostly above a keystroke)
+  let lo = 0, hi = ranges.length;
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (ranges[mid].to < from) lo = mid + 1; else hi = mid; }
+  const out = lo ? ranges.slice(0, lo) : [];
+  for (let i = lo; i < ranges.length; i++) {
+    const range = ranges[i];
     const inside = from >= range.from && end <= range.to;
     const joined = inside && continuation && identifier.test(before.slice(range.from, range.to));
     if (joined && /hljs-(type|variable|title|attr|literal)/.test(range.cls)) {
       // stale until the next classification: a keyword the typing completes wins over it
-      if (range.to + delta > range.from) out.push({ ...range, to: range.to + delta, stale: true });
+      if (range.to + delta > range.from) out.push({ from: range.from, to: range.to + delta, cls: range.cls, stale: true });
     } else if (range.to <= from && !(joined && added)) out.push(range);
-    else if (range.from >= end && !(joined && added)) out.push({ ...range, from: range.from + delta, to: range.to + delta });
+    // (a literal, not a spread: the ranges after a keystroke are made anew every time)
+    else if (range.from >= end && !(joined && added)) out.push(range.stale ? { from: range.from + delta, to: range.to + delta, cls: range.cls, stale: true } : { from: range.from + delta, to: range.to + delta, cls: range.cls });
   }
   return out;
 }

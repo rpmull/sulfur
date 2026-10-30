@@ -13,11 +13,61 @@ use axum::{
     http::{header, HeaderValue, Response, StatusCode},
 };
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 
 /// a text file read or saved whole: source as big as an amalgamation's
 pub const MAX_TEXT: usize = 16 << 20;
+
+/// whether `hay` holds `needle` regardless of case; `needle` already lowercase. An ASCII
+/// needle is found by comparing bytes as they lie, with no copy of the text: a search of a
+/// workspace lowercased every line of every file before
+pub fn contains_ci(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if !needle.is_ascii() {
+        return hay.to_lowercase().contains(needle);
+    }
+    let (h, n) = (hay.as_bytes(), needle.as_bytes());
+    if n.len() > h.len() {
+        return false;
+    }
+    let first = n[0];
+    let upper = first.to_ascii_uppercase();
+    let last = h.len() - n.len();
+    let mut i = 0;
+    while i <= last {
+        let c = h[i];
+        if (c == first || c == upper) && h[i..i + n.len()].eq_ignore_ascii_case(n) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// the lines of a text holding `q` (lowercase), five at most, as Find in Files shows them:
+/// a file without it anywhere is passed over in one scan, its lines never walked
+pub fn text_matches(data: &[u8], q: &str) -> Vec<Value> {
+    let text = String::from_utf8_lossy(data);
+    let mut matches = Vec::new();
+    if !contains_ci(&text, q) {
+        return matches;
+    }
+    for (i, line) in text.split('\n').enumerate() {
+        if !contains_ci(line, q) {
+            continue;
+        }
+        let trimmed = line.trim();
+        let shown = if trimmed.chars().count() > 240 { format!("{}…", trimmed.chars().take(240).collect::<String>()) } else { trimmed.to_owned() };
+        matches.push(json!({ "line": i + 1, "text": shown }));
+        if matches.len() >= 5 {
+            break;
+        }
+    }
+    matches
+}
 pub const GONE: &str = "no such file or folder";
 
 /// An answer the page shows as it is: its message and status

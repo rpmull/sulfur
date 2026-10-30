@@ -548,22 +548,9 @@ pub struct RemoteFiles {
     uploads: Mutex<HashMap<String, Upload>>,
 }
 
-/// the lines of a text holding `q`, five at most, as Find in Files shows them
+/// the lines of a text holding `q`, five at most, as Find in Files shows them (util.rs)
 fn text_matches(data: &[u8], q: &str) -> Vec<Value> {
-    let text = String::from_utf8_lossy(data);
-    let mut matches = Vec::new();
-    for (i, line) in text.split('\n').enumerate() {
-        if !line.to_lowercase().contains(q) {
-            continue;
-        }
-        let trimmed = line.trim();
-        let shown = if trimmed.chars().count() > 240 { format!("{}…", trimmed.chars().take(240).collect::<String>()) } else { trimmed.to_owned() };
-        matches.push(json!({ "line": i + 1, "text": shown }));
-        if matches.len() >= 5 {
-            break;
-        }
-    }
-    matches
+    crate::util::text_matches(data, q)
 }
 
 impl RemoteFiles {
@@ -692,7 +679,7 @@ impl RemoteFiles {
                 let p = posix_join(&dir, &e.name);
                 let file = join(&abs, &e.name);
                 if glob.is_empty() || glob_match(glob, &e.name) {
-                    if !content && (q.is_empty() || e.name.to_lowercase().contains(&q)) {
+                    if !content && crate::util::contains_ci(&e.name, &q) {
                         results.push(json!({ "path": if e.dir { format!("{p}/") } else { p.clone() } }));
                     } else if content && !e.dir && !e.link && e.size.unwrap_or(u64::MAX) <= 1 << 20 {
                         if let Ok(data) = self.sftp.read(file.clone()).await {

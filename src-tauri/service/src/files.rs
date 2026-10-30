@@ -14,6 +14,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
 
 use crate::util::{
+    contains_ci, text_matches,
     fail, fail_at, glob_match, home_dir, locale_compare, safe_path, skipper, Fail, Res, MAX_TEXT,
 };
 
@@ -339,29 +340,12 @@ impl Files {
                     let p = posix_join(dir, &e.name);
                     let file = abs.join(&e.name);
                     if glob.is_empty() || glob_match(glob, &e.name) {
-                        if !content && (q.is_empty() || e.name.to_lowercase().contains(q)) {
+                        if !content && contains_ci(&e.name, q) {
                             st.0.push(json!({ "path": if e.dir { format!("{p}/") } else { p.clone() } }));
                         } else if content && !e.dir && !e.link && e.size.unwrap_or(u64::MAX) <= 1 << 20 {
                             if let Ok(data) = fs::read(&file) {
                                 if !data.contains(&0) {
-                                    let text = String::from_utf8_lossy(&data);
-                                    let mut matches = Vec::new();
-                                    for (i, line) in text.split('\n').enumerate() {
-                                        if !line.to_lowercase().contains(q) {
-                                            continue;
-                                        }
-                                        let trimmed = line.trim();
-                                        let count = trimmed.chars().count();
-                                        let shown = if count > 240 {
-                                            format!("{}…", trimmed.chars().take(240).collect::<String>())
-                                        } else {
-                                            trimmed.to_owned()
-                                        };
-                                        matches.push(json!({ "line": i + 1, "text": shown }));
-                                        if matches.len() >= 5 {
-                                            break;
-                                        }
-                                    }
+                                    let matches = text_matches(&data, q);
                                     if !matches.is_empty() {
                                         st.0.push(json!({ "path": p, "matches": matches }));
                                     }
@@ -702,6 +686,15 @@ mod tests {
             found["results"],
             json!([{ "path": "dir/a.js", "matches": [{ "line": 1, "text": "Hello" }, { "line": 2, "text": "hello" }] }])
         );
+        // case-blind for names and text, ASCII or not
+        fs::write(root.join("dir/Ünïcode.txt"), "straße\nSTRASSE\nÜnïcode here").unwrap();
+        assert_eq!(files.search("0", "", "HELLO", true, "", "").await.unwrap()["results"].as_array().unwrap().len(), 1);
+        let text = files.search("0", "", "ünïcode", true, "", "").await.unwrap();
+        assert_eq!(text["results"], json!([{ "path": "dir/Ünïcode.txt", "matches": [{ "line": 3, "text": "Ünïcode here" }] }]));
+        let names: Vec<String> = files.search("0", "", "ünï", false, "", "").await.unwrap()["results"]
+            .as_array().unwrap().iter().map(|e| e["path"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(names, ["dir/Ünïcode.txt"]);
+        assert!(files.search("0", "", "nothere", true, "", "").await.unwrap()["results"].as_array().unwrap().is_empty());
         assert_eq!(files.read("0", "binary").await.unwrap()["binary"], true);
         assert_eq!(files.read("0", "dir/a.js").await.unwrap()["text"], "Hello\r\nhello\nother");
         files.save("0", "dir/a.js", None, Some("other".into()), Some("world".into())).await.unwrap();
