@@ -37,6 +37,7 @@ setting names:
 | Find: every match a cursor | `Alt+Enter` in the find box | |
 | Font zoom with the mouse wheel | `Ctrl+wheel` | `editor.mouseWheelZoom` |
 | Outline: the active file's types, methods and fields under the Explorer's tree, the caret's lit | | |
+| Lines added, changed or deleted since the last commit marked in the gutter and the overview ruler as you edit; Go to Next / Previous Change | `Alt+F5` / `Shift+Alt+F5` | `scm.diffDecorations` |
 
 Typing also follows VS Code. Home moves between the first non-blank character and the line
 start. A closing bracket typed on a blank line outdents to its opener. Enter after `/**`

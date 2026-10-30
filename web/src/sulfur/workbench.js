@@ -71,6 +71,7 @@ import { symbolsFor, identifierAt, enclosingSymbol } from '../symbols.js';
 import { singleFileCommand, configsFor } from './build-commands.js';
 import { supportsMesh } from './mesh.js';
 import { autoSaver, AUTO_SAVE_MODES } from './auto-save.js';
+import { lineChanges } from './line-diff.js';
 import { askBox, sshFolder, sshLabel, sshNeedBox } from './ssh.js';
 import { cmakeTargets, cmakeConfiguration, targetForFile, executableCommand, absolutePath, joinPath } from './project-targets.js';
 import { LOOK_IDS, PALETTES, PALETTE_EVENT, lookNow, paletteNow, setPalette } from '#host';
@@ -535,6 +536,7 @@ const SETTINGS = {
   'explorer.confirmDelete': { def: true, type: 'boolean', title: 'Explorer: Confirm Delete', about: 'Controls whether the explorer asks before deleting a file or folder. A delete here is for good: there is no trash.' },
   'explorer.autoReveal': { def: true, type: 'boolean', title: 'Explorer: Auto Reveal', about: 'Controls whether the explorer reveals and selects the active file.' },
   'notes.rng.enabled': { def: true, type: 'boolean', title: 'Notes: RNG', about: 'Roll in rendered notes: inline `rng: 2d6+1`, `rng: 1-100`, `rng: coin`, `rng: pick a | b | c` and ```rng tables. Click a result to roll again.' },
+  'scm.diffDecorations': { def: true, type: 'boolean', title: 'Source Control: Diff Decorations', about: 'Mark the lines added, changed or deleted since the last commit in the gutter and the overview ruler, as you edit. Alt+F5 and Shift+Alt+F5 step through them.' },
   'git.autofetch': { def: true, type: 'boolean', title: 'Git: Autofetch', about: 'Fetch the branch’s upstream when a folder opens and every three minutes after, so Source Control shows the commits waiting to be pulled.' },
   'search.exclude': { def: 'build, out, bin, obj, target, .vs, .vscode, cmake-build-*, dist, .cache, .gradle, __pycache__, node_modules, .git', type: 'string', title: 'Search: Exclude', about: 'Comma separated folder names or simple globs left out of quick open (Ctrl+P) and Find in Files, as a big project’s build outputs and caches are; the explorer still shows them.' },
   'files.exclude': { def: '.git, node_modules, __pycache__, .DS_Store', type: 'string', title: 'Files: Exclude', about: 'Comma separated names (node_modules), extensions (.meta hides every *.meta file), globs (*.o, *.{png,jpg}) or paths (build/cache) hidden from the explorer, quick open and search. VS Code\'s **/ forms work too.' },
@@ -2831,6 +2833,7 @@ function tabState(t, info) {
     notify('info', `${t.title} is a Git LFS pointer, not the file’s content.`, { actions: [{ label: 'Pull LFS Files', run: () => scmLfsPull() }] });
   }
   if (info.dirty && t.preview) pin(t);
+  if (info.ready && t.rel && t.gitDiffText !== t.ed?.text()) gitDiffSoon(t);
   if (!was || was.dirty !== info.dirty || (info.dirty && was.length !== info.length)) I.autoSave?.changed(t, info.dirty && info.ready && !info.readOnly && !info.bad, setting('files.autoSave'), setting('files.autoSaveDelay'));
   if (!was || was.dirty !== info.dirty) t.tabEl.classList.toggle('dirty', info.dirty);
   // typing moves every diagnostic after the caret: the problems list redrawn when what it
@@ -3931,6 +3934,8 @@ function registerCommands() {
   L('editor.action.transposeLetters', 'Transpose Letters', 'transpose', IS_MAC ? 'meta+t' : '');
   for (const id of ['editor.action.duplicateSelection', 'editor.action.sortLinesAscending', 'editor.action.sortLinesDescending', 'editor.action.transformToUppercase',
     'editor.action.transformToLowercase', 'editor.action.transformToTitlecase', 'editor.action.joinLines', 'editor.action.trimTrailingWhitespace']) I.commands.get(id).when = hasEd;
+  C('workbench.action.editor.nextChange', 'Go to Next Change', () => { if (!I.active.ed.nextChange(1)) setStatusFlash('No changes since the last commit'); }, { key: 'alt+f5', when: hasEd, category: 'Go' });
+  C('workbench.action.editor.previousChange', 'Go to Previous Change', () => { if (!I.active.ed.nextChange(-1)) setStatusFlash('No changes since the last commit'); }, { key: 'shift+alt+f5', when: hasEd, category: 'Go' });
   C('editor.action.marker.next', 'Go to Next Problem (Error, Warning, Info)', () => nextProblem(1), { key: 'f8', when: hasEd, category: 'Go' });
   C('editor.action.triggerSuggest', 'Trigger IntelliSense', () => languages.suggest(I.active), { key: 'ctrl+space', when: hasEd, category: 'Editor' });
   C('editor.action.inlineSuggest.trigger', 'Trigger AI Inline Suggestion', () => { I.active.ed.focus(); return inlineCompletions.trigger(I.active, true); }, { key: 'alt+\\', when: hasEd, category: 'Editor' });
@@ -7625,6 +7630,9 @@ async function scmRefresh(loud = false) {
       s.prefix = pre.trim();
       const st = await git(['status', '--porcelain=v1', '-b', '-z', '--untracked-files=all'], { where });
       Object.assign(s, parseGitStatus(st.out));
+      // the commit the open files are compared with for their gutter marks
+      const head = await git(['rev-parse', '--verify', '-q', 'HEAD'], { where, anyCode: true, quiet: true }).catch(() => null);
+      s.head = head?.code === 0 ? String(head.out || '').trim() : '';
     }
   } catch (err) {
     s.why = err.message;
@@ -7633,12 +7641,44 @@ async function scmRefresh(loud = false) {
   s.decorations = explorerChanges(s, I.st.root);
   s.lfs = s.top ? scmLfsSeen.get(`${s.host}\n${s.top}`)?.lfs || null : null;
   I.scm = s;
+  for (const t of I.tabs) if (t.ed) gitDiffSoon(t);
   paintTreeSoon();
   if (loud && s.why && s.why !== 'none') notify('error', `Source Control: ${s.why}`);
   paintScm();
   paintStatus();
   scmAutoFetch(s, where);
   if (s.top) scmLfs(s, where, loud);
+}
+
+// --- the gutter's change marks: each open file diffed, as it's edited, against the version
+// committed (git show HEAD:path, fetched once per commit), the lines added, changed and
+// deleted marked in its gutter and overview ruler (line-diff.js) ---
+const GIT_DIFF_MAX = 2 * 1024 * 1024;
+// a workspace file's path as git names it from the repository's top
+function gitPathOf(t) {
+  const s = I.scm;
+  if (!s?.top || !t.rel || !under(t.rel, I.st.root) || t.loc && !sameLoc(t.loc, locOf())) return '';
+  return `${s.prefix}${t.rel.slice(I.st.root.length + 1)}`;
+}
+function gitDiffSoon(t) { clearTimeout(t.gitDiffTimer); t.gitDiffTimer = setTimeout(() => gitDiff(t), 300); }
+async function gitDiff(t) {
+  if (!I || !I.tabs.includes(t) || !t.ed?.ready()) return;
+  const s = I.scm, path = gitPathOf(t);
+  if (!setting('scm.diffDecorations') || !path || !s.head) { t.ed.setChanges([]); return; }
+  const key = `${s.host}\n${s.top}\n${s.head}\n${path}`;
+  if (t.gitBase?.key !== key) {
+    if (t.gitBaseLoading === key) return;
+    t.gitBaseLoading = key;
+    const r = await git(['show', `HEAD:${path}`], { anyCode: true, quiet: true, ...atTop() }).catch(() => null);
+    if (!I || !I.tabs.includes(t) || t.gitBaseLoading !== key) return;
+    t.gitBaseLoading = '';
+    // the committed text as the editor holds its own: LF line endings
+    t.gitBase = { key, text: r && r.code === 0 ? String(r.out ?? '').replace(/\r\n/g, '\n') : null };
+  }
+  const text = t.ed.text();
+  if (t.gitDiffText === text && t.gitDiffBase === t.gitBase) return;
+  t.gitDiffText = text; t.gitDiffBase = t.gitBase;
+  t.ed.setChanges(t.gitBase.text === null || text.length > GIT_DIFF_MAX ? [] : lineChanges(t.gitBase.text, text) || []);
 }
 
 // --- Git LFS: whether the repository keeps files in it, whether git-lfs is on the machine
@@ -9090,7 +9130,7 @@ function applySettings() {
   if (family) r.style.setProperty('--ide-code-family', family); else r.style.removeProperty('--ide-code-family');
   r.style.setProperty('--ide-code-ligatures', setting('editor.fontLigatures') ? 'normal' : 'none');
   r.classList.toggle('ide-zen', !!I.zen);
-  for (const t of I.tabs) if (t.ed) t.ed.show(true);
+  for (const t of I.tabs) if (t.ed) { t.ed.show(true); gitDiffSoon(t); }
   languages.cancelCompletions();
   paintLayout();
   paintStatus();
@@ -10599,7 +10639,8 @@ const VSCODE_VARS = {
   'editorWidget-background': '--ide-widget', 'editorWidget-border': '--ide-widget-border', 'menu-background': '--ide-widget', 'menu-foreground': '--ide-fg',
   'toolbar-hoverBackground': '--ide-hover', 'editor-selectionBackground': '--ide-ed-sel',
   'editorBracketHighlight-foreground1': '--ide-bracket-1', 'editorBracketHighlight-foreground2': '--ide-bracket-2', 'editorBracketHighlight-foreground3': '--ide-bracket-3',
-  'editorBracketHighlight-unexpectedBracket-foreground': '--ide-bracket-unexpected', 'editorStickyScroll-background': '--ide-sticky-bg', 'editorStickyScroll-shadow': '--ide-sticky-shadow',
+  'editorBracketHighlight-unexpectedBracket-foreground': '--ide-bracket-unexpected',
+  'editorGutter-addedBackground': '--ide-git-added', 'editorGutter-modifiedBackground': '--ide-git-modified', 'editorGutter-deletedBackground': '--ide-git-deleted', 'editorStickyScroll-background': '--ide-sticky-bg', 'editorStickyScroll-shadow': '--ide-sticky-shadow',
   'minimap-background': '--ide-minimap-bg', 'minimapSlider-background': '--ide-minimap-slider', 'editorLineNumber-foreground': '--ide-line-nr', 'tab-activeBackground': '--ide-bg',
   'tab-inactiveBackground': '--ide-side', 'tab-activeForeground': '--ide-strong', 'tab-inactiveForeground': '--ide-muted', 'scrollbarSlider-background': '--ide-scroll',
   'scrollbarSlider-hoverBackground': '--ide-scroll', 'scrollbarSlider-activeBackground': '--ide-scroll', 'textCodeBlock-background': '--ide-side', 'textPreformat-foreground': '--ide-fg',

@@ -220,3 +220,23 @@ test('linked editing finds the partner tag name in HTML, XML and JSX, not for se
   const odd = '<div></span>';
   assert.equal(linkedTagRange(html.parse(odd), odd, 2), null);
 });
+
+test('the lines changed since a commit are found as hunks, cheaply in a long file, never for a rewrite', async () => {
+  const { lineChanges } = await import('../src/sulfur/line-diff.js');
+  const cases = [
+    ['a\nb\nc\n', 'a\nb\nc\n', []],
+    ['a\nb\nc\n', 'a\nx\nc\n', [{ from: 1, count: 1, kind: 'modified' }]],
+    ['a\nb\nc\n', 'a\nb\nnew\nc\n', [{ from: 2, count: 1, kind: 'added' }]],
+    ['a\nb\nc\n', 'a\nc\n', [{ from: 1, count: 0, kind: 'deleted' }]],
+    ['a\nb\nc\nd\n', 'a\nB\nc\nD\n', [{ from: 1, count: 1, kind: 'modified' }, { from: 3, count: 1, kind: 'modified' }]],
+    ['a\nb\nc\nd\n', 'x\nb\nc\n', [{ from: 0, count: 1, kind: 'modified' }, { from: 3, count: 0, kind: 'deleted' }]],
+    ['', 'a\nb\n', [{ from: 0, count: 2, kind: 'added' }]],
+    ['a\nb\n', '', [{ from: 0, count: 0, kind: 'deleted' }]],
+    ['a\nb\nc\nd\ne\n', 'a\nb\nX\nY\nZ\nd\ne\n', [{ from: 2, count: 3, kind: 'modified' }]],
+  ];
+  for (const [base, text, want] of cases) assert.deepEqual(lineChanges(base, text), want, JSON.stringify([base, text]));
+  const base = Array.from({ length: 20000 }, (_, i) => `line ${i}`).join('\n') + '\n';
+  const text = base.replace('line 5000\n', 'line 5000 changed\n').replace('line 15000\n', '').replace('line 9999\n', 'line 9999\nnew\n');
+  assert.deepEqual(lineChanges(base, text), [{ from: 5000, count: 1, kind: 'modified' }, { from: 10000, count: 1, kind: 'added' }, { from: 15001, count: 0, kind: 'deleted' }]);
+  assert.equal(lineChanges(base, base.split('\n').reverse().join('\n')), null);
+});

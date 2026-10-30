@@ -300,6 +300,8 @@ function codeEditor(view, file, btn, id, opts = {}) {
   let retry = 1000;
   let people = [];
   let bookmarks = [];
+  // the lines changed since the file was committed, as the host diffs them: [{ from, count, kind }]
+  let changes = [];
   // this tab's own id in the session, its own caret never drawn
   let me = 0;
   // someone else in the file: edits go to them as typed, the session saving them soon after.
@@ -916,7 +918,8 @@ function codeEditor(view, file, btn, id, opts = {}) {
     if (!overviewColors || overviewEpoch !== fontEpoch) {
       const cs = getComputedStyle(view);
       const v = (name, fall) => cs.getPropertyValue(name).trim() || fall;
-      overviewColors = { err: v('--ide-err', '#f14c4c'), warn: v('--ide-warn', '#cca700'), info: v('--ide-info', '#3794ff'), find: v('--ide-find-now', '#d18616'), mark: v('--ide-accent', '#3794ff'), word: v('--ide-word-hl-ruler', v('--ide-muted', '#888')), caret: v('--ide-caret', '#ccc') };
+      overviewColors = { err: v('--ide-err', '#f14c4c'), warn: v('--ide-warn', '#cca700'), info: v('--ide-info', '#3794ff'), find: v('--ide-find-now', '#d18616'), mark: v('--ide-accent', '#3794ff'), word: v('--ide-word-hl-ruler', v('--ide-muted', '#888')), caret: v('--ide-caret', '#ccc'),
+        added: v('--ide-git-added', '#587c0c'), modified: v('--ide-git-modified', '#0c7d9d'), deleted: v('--ide-git-deleted', '#94151b') };
       overviewEpoch = fontEpoch;
     }
     const c = overview.getContext('2d');
@@ -929,6 +932,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     const bar = (offset, color, x, width, height = 2) => { c.fillStyle = color; c.fillRect(x, Math.round(y(offset)), width, height); };
     const occ = occurrences;
     if (occ && occ.text === text) for (const [from] of occ.ranges) bar(from, overviewColors.word, 3, 4);
+    for (const h of changes) if (h.from < lineStarts.length) bar(lineStarts[h.from], h.kind === 'added' ? overviewColors.added : h.kind === 'modified' ? overviewColors.modified : overviewColors.deleted, 0, 3, Math.max(2, Math.round((h.count || 1) * g.lh / total * h)));
     if (findRanges.length) for (const [from] of findRanges.slice(0, 5000)) bar(from, overviewColors.find, 3, 4);
     for (const at of bookmarks) bar(at, overviewColors.mark, 0, 3, 3);
     if (errsText === text) for (const x of errs) bar(x.from, x.severity === 2 ? overviewColors.warn : x.severity > 2 ? overviewColors.info : overviewColors.err, 6, 4, 3);
@@ -1525,6 +1529,8 @@ function codeEditor(view, file, btn, id, opts = {}) {
     const { lh, numsTop: padTop, cw, top: padY, left: padX } = geom();
     const want = [];
     for (const line of new Set(bookmarks.map((at) => lineAt(text, Math.min(at, text.length)) - 1))) want.push({ kind: 'bookmark', line });
+    // the lines changed since the file was committed (line-diff.js), a mark per hunk
+    for (const h of changes) want.push({ kind: 'change', line: h.from, count: h.count, change: h.kind });
     const byLine = new Map();
     for (const e of errsText === text ? errs : []) {
       const line = lineAt(text, Math.min(e.from, text.length)) - 1;
@@ -1540,14 +1546,20 @@ function codeEditor(view, file, btn, id, opts = {}) {
       const line = lineAt(text, at) - 1;
       want.push({ kind: 'person', line, col: columnOf(text, lineStarts[line], at), p, tint: p.color || colorFor(p.name) });
     }
-    const key = `${lh}|${padTop}|${cw}|${padY}|${padX}|${drawn.first}|${drawn.last}|` + want.filter((m) => m.line >= drawn.first && m.line < drawn.last).map((m) => m.kind === 'person' ? `p${m.line}:${m.col}:${m.p.name}:${m.tint}:${!!m.p.agent}` : `${m.kind}${m.line}:${m.severity ?? ''}:${m.title ?? ''}`).join('|');
+    const inWindow = (m) => m.line < drawn.last && m.line + Math.max(1, m.count || 0) > drawn.first;
+    const key = `${lh}|${padTop}|${cw}|${padY}|${padX}|${drawn.first}|${drawn.last}|` + want.filter(inWindow).map((m) => m.kind === 'person' ? `p${m.line}:${m.col}:${m.p.name}:${m.tint}:${!!m.p.agent}` : m.kind === 'change' ? `c${m.line}:${m.count}:${m.change}` : `${m.kind}${m.line}:${m.severity ?? ''}:${m.title ?? ''}`).join('|');
     if (key === marksKey) return;
     marksKey = key;
     for (const m of gutter.querySelectorAll('.code-mark')) m.remove();
     for (const c of body.querySelectorAll('.code-caret')) c.remove();
     for (const m of want) {
-      if (m.line < drawn.first || m.line >= drawn.last) continue;
-      if (m.kind === 'bookmark') {
+      if (!inWindow(m)) continue;
+      if (m.kind === 'change') {
+        const mark = Object.assign(el('div', `code-mark code-mark-change ${m.change === 'added' ? 'add' : m.change === 'modified' ? 'mod' : 'del'}`), { title: m.change === 'deleted' ? `Lines deleted before line ${m.line + 1}` : `${m.count} line${m.count === 1 ? '' : 's'} ${m.change}` });
+        mark.style.top = `${padTop + m.line * lh}px`;
+        mark.style.height = `${(m.count || 0) * lh}px`;
+        gutter.append(mark);
+      } else if (m.kind === 'bookmark') {
         const mark = Object.assign(el('div', 'code-mark code-mark-bookmark'), { title: `Bookmark: line ${m.line + 1}` });
         mark.style.top = `${padTop + m.line * lh}px`;
         mark.style.height = `${lh}px`;
@@ -2337,6 +2349,24 @@ function codeEditor(view, file, btn, id, opts = {}) {
     lineHeight: () => geom().lh,
     setFinds: (ranges, at = -1) => { findRanges = ranges; findAt = at; paintFinds(); overviewSoon(); },
     setBookmarks: (offsets) => { if (bookmarks.length === offsets.length && bookmarks.every((at, i) => at === offsets[i])) return; bookmarks = offsets; paintMarks(); overviewSoon(); },
+    // the lines changed since the commit, for the gutter and the overview ruler
+    setChanges: (list) => {
+      if (closed) return;
+      if (changes.length === list.length && changes.every((h, i) => h.from === list[i].from && h.count === list[i].count && h.kind === list[i].kind)) return;
+      changes = list; paintMarks(); overviewSoon();
+    },
+    // Go to Next / Previous Change: the caret to the next hunk's first line, wrapping round
+    nextChange(d = 1) {
+      if (!changes.length) return false;
+      const text = ta.value, line = lineAt(text, ta.selectionStart) - 1;
+      const order = d > 0 ? changes : [...changes].reverse();
+      const hit = order.find((h) => (d > 0 ? h.from > line : h.from < line)) || order[0];
+      lineAt(text, 0);
+      const at = lineStarts[Math.min(hit.from, lineStarts.length - 1)] ?? 0;
+      ta.focus({ preventScroll: true }); ta.setSelectionRange(at, at);
+      caretInView(true); sendCursor(); tell();
+      return true;
+    },
     preview: isMd ? (on) => setRendered(on ?? !rendered) : null,
     previewing: () => rendered,
     close: () => {
