@@ -191,8 +191,9 @@ const extOf = (p) => { const b = String(p).split('/').pop().toLowerCase(); retur
 function fileIcon(p, dir = false, open = false) {
   const theme = I?.iconTheme;
   if (theme) {
-    // a theme's light set while the colors are light
-    const light = getComputedStyle(I.w.node).colorScheme === 'light';
+    // a theme's light set while the colors are light: read once per appearance, not per icon
+    // (a computed-style read per row forced the tree's style to be worked out again and again)
+    const light = I.iconLight ?? (I.iconLight = getComputedStyle(I.w.node).colorScheme === 'light');
     const def = iconOf(theme.data, p, { directory: dir, open, root: dir && p === I.st.root, light });
     if (def) return themedIcon(def, theme);
   }
@@ -9141,6 +9142,7 @@ function applySettings() {
   const r = I.root;
   inlineCompletions.reset();
   applyAppearance();
+  I.iconLight = undefined;
   r.style.setProperty('--ide-code-font', `${setting('editor.fontSize')}px`);
   // a whole number of pixels: a fractional line height is rounded differently by the textarea
   // and the highlighted text under it, the two drifting apart a pixel every 64 lines
