@@ -473,6 +473,36 @@
 .code-deco-marks mark.word { background: var(--ide-word-hl, color-mix(in srgb, var(--ide-fg, var(--fg)) 14%, transparent)); }
 .code-deco-marks mark.bracket { border-radius: 0; background: var(--ide-bracket, rgb(0 100 0 / 0.1)); box-shadow: inset 0 0 0 1px var(--ide-bracket-border, #888); }
 .code-deco-marks mark.sel { background: var(--ide-ed-sel, color-mix(in srgb, var(--accent) 30%, var(--card))); }
+/* a color written in a stylesheet, shown under itself */
+.code-deco-marks mark.swatch { border-bottom: 3px solid var(--swatch); border-radius: 0; }
+/* the other cursors (multi-cursor.js): a bar at each, blinking as the textarea's own */
+.code-deco-marks .code-extra-caret { display: inline-block; width: 0; height: 1em; vertical-align: text-bottom; border-left: 2px solid var(--ide-caret, var(--accent)); margin-left: -1px; animation: code-caret-blink 1s steps(1) infinite; }
+@keyframes code-caret-blink { 50% { opacity: 0; } }
+/* bracket pairs by their nesting (bracket-colors.js) */
+.code-hl .bracket-1 { color: var(--ide-bracket-1, #ffd700); }
+.code-hl .bracket-2 { color: var(--ide-bracket-2, #da70d6); }
+.code-hl .bracket-3 { color: var(--ide-bracket-3, #179fff); }
+.code-hl .bracket-unexpected { color: var(--ide-bracket-unexpected, var(--ide-err, #f14c4c)); }
+/* the minimap (minimap.js) beside the overview ruler, the text kept clear of it */
+.code-minimap { position: absolute; right: 10px; z-index: 3; cursor: default; background: var(--ide-minimap-bg, var(--ide-bg, var(--card))); box-shadow: -1px 0 0 var(--ide-border, var(--border)); }
+.code-minimap[hidden] { display: none; }
+.code-ed.code-has-minimap { padding-right: 100px; }
+/* the minimap's colors, read from these by the editor: its plain text and its slider */
+.code-hl .code-minimap-plain { color: var(--ide-fg, var(--fg)); }
+.code-hl .code-minimap-slider { color: var(--ide-minimap-slider, var(--ide-fg, var(--fg))); }
+/* sticky scroll (sticky-scroll.js): the scopes' opening lines held over the top of the text */
+.code-sticky { position: absolute; left: 0; right: 10px; z-index: 4; background: var(--ide-sticky-bg, var(--ide-bg, var(--card))); box-shadow: 0 2px 6px var(--ide-sticky-shadow, #0004); overflow: hidden; cursor: pointer; }
+.code-sticky[hidden] { display: none; }
+.code-sticky-row { display: flex; align-items: stretch; white-space: pre; font-family: var(--mono); font-size: var(--code-font); line-height: var(--code-lh); }
+.code-sticky-row:hover { background: var(--ide-hover, color-mix(in srgb, var(--ide-fg, var(--fg)) 8%, transparent)); }
+.code-sticky-nr { flex: none; box-sizing: border-box; text-align: right; padding: 0 1.4ch 0 2.4ch; color: var(--ide-line-nr, var(--dim)); user-select: none; }
+.code-sticky-text { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.code-sticky-text > code { display: block; font: inherit; background: none; padding: 0; color: var(--ide-fg, var(--fg)); }
+.code-ed.code-has-minimap ~ .code-sticky { right: 100px; }
+/* the editor's font, a setting's over the theme's, ligatures when asked for */
+.ide :is(.code-ta, .code-hl, .code-nums, .code-nr-now, .code-sticky-row) { font-family: var(--ide-code-family, var(--mono)); font-variant-ligatures: var(--ide-code-ligatures, none); }
+/* zen mode: the text alone */
+.ide-zen .ide-activity, .ide-zen .ide-status, .ide-zen .ide-toolbar { display: none !important; }
 .code-nr-now {
   position: absolute; left: 0; right: 0; box-sizing: border-box; padding: 0 0.7ch 0 1.2ch; text-align: right; white-space: pre; pointer-events: none;
   font-family: var(--mono); font-size: var(--code-font); font-variant-ligatures: none; color: var(--ide-line-nr-now, var(--fg)); background: var(--card);

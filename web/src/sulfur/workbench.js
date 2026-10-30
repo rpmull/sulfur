@@ -45,7 +45,7 @@ import { expandSelection } from './smart-select.js';
 import { excludeMatcher } from './excludes.js';
 import { findMatches, literalSearch } from './search.js';
 import { topRanked } from './ranked.js';
-import { applyTextEdits } from './language-client.js';
+import { applyTextEdits, textEditRanges } from './language-client.js';
 import { sidebarRight, runTargetName, moveBookmarks } from './navigation.js';
 import { fileKind, renderFileIcon } from './file-icons.js';
 import { extensionHostHTML } from './extension-host.js';
@@ -70,6 +70,7 @@ import { mountNoteGraph } from './notes-graph.js';
 import { symbolsFor, identifierAt, enclosingSymbol } from '../symbols.js';
 import { singleFileCommand, configsFor } from './build-commands.js';
 import { supportsMesh } from './mesh.js';
+import { autoSaver, AUTO_SAVE_MODES } from './auto-save.js';
 import { askBox, sshFolder, sshLabel, sshNeedBox } from './ssh.js';
 import { cmakeTargets, cmakeConfiguration, targetForFile, executableCommand, absolutePath, joinPath } from './project-targets.js';
 import { LOOK_IDS, PALETTES, PALETTE_EVENT, lookNow, paletteNow, setPalette } from '#host';
@@ -505,6 +506,16 @@ const SETTINGS = {
   'editor.diagnostics.delay': { def: 500, type: 'number', min: 300, max: 5000, title: 'Editor: Syntax Check Delay', about: 'Idle time in milliseconds before Sulfur\'s own syntax check marks half-typed code. A language server\'s problems show as soon as it reports them.' },
   'sulfur.languageServerSettings': { def: {}, type: 'object', title: 'Languages: Server Settings', about: 'Language-server settings, keyed by extension id (typescript, python, javascript, java, csharp, php, shell, cpp, hcl, go). Runtime prerequisites and installation are in Extensions.' },
   'editor.fontSize': { def: 13, type: 'number', min: 8, max: 40, title: 'Editor: Font Size', about: 'Controls the font size in pixels.' },
+  'editor.fontFamily': { def: '', type: 'string', title: 'Editor: Font Family', about: 'The font family of the text, as CSS names it ("JetBrains Mono", "Fira Code", monospace). Empty for the theme’s own monospace font.' },
+  'editor.fontLigatures': { def: false, type: 'boolean', title: 'Editor: Font Ligatures', about: 'Draw the font’s ligatures (=> and !== as one glyph) when the font has them.' },
+  'editor.lineNumbers': { def: 'on', type: 'enum', options: [['on', 'On'], ['relative', 'Relative to the caret’s line'], ['interval', 'Every tenth line'], ['off', 'Off']], title: 'Editor: Line Numbers', about: 'How line numbers are shown in the gutter. Relative numbers count from the caret’s line, as Vim’s do; the caret’s own line keeps its absolute number.' },
+  'editor.minimap.enabled': { def: true, type: 'boolean', title: 'Editor: Minimap', about: 'Show the file at a glance beside the text, a slider over the part on screen. Click or drag it to scroll.' },
+  'editor.stickyScroll.enabled': { def: true, type: 'boolean', title: 'Editor: Sticky Scroll', about: 'Hold the lines opening the scopes the top of the view is in (a class, a function, an if) at the top as you scroll past them. Click one to go to it. Needs a language the page parses.' },
+  'editor.bracketPairColorization.enabled': { def: true, type: 'boolean', title: 'Editor: Bracket Pair Colorization', about: 'Color each bracket pair by its nesting level, a closer with no opener red. Brackets in strings and comments are left alone.' },
+  'editor.colorDecorators': { def: true, type: 'boolean', title: 'Editor: Color Decorators', about: 'Underline the colors written in stylesheets and HTML (#fff, rgb(), hsl()) in that color.' },
+  'editor.cursorSurroundingLines': { def: 0, type: 'number', min: 0, max: 20, integer: true, title: 'Editor: Cursor Surrounding Lines', about: 'Lines kept visible above and below the caret as it moves (Vim’s scrolloff).' },
+  'files.autoSave': { def: 'off', type: 'enum', options: [['off', 'Off'], ['afterDelay', 'After a delay'], ['onFocusChange', 'When the editor loses focus'], ['onWindowChange', 'When the window loses focus']], title: 'Files: Auto Save', about: 'Save files on their own: some time after the last edit, when their editor loses focus, or when the window does. Format On Save runs for the focus modes only, as VS Code has it.' },
+  'files.autoSaveDelay': { def: 1000, type: 'number', min: 100, max: 60000, integer: true, title: 'Files: Auto Save Delay', about: 'Milliseconds after the last edit before an auto save, with Auto Save set to afterDelay.' },
   'editor.renderLineHighlight': { def: 'line', type: 'enum', options: [['line', 'Line and line number'], ['gutter', 'Line number only'], ['none', 'None']], title: 'Editor: Render Line Highlight', about: 'How the caret\'s line is shown. The line is lit only while nothing is selected.' },
   'editor.rulers': { def: '', type: 'string', title: 'Editor: Rulers', about: 'Columns to draw vertical rulers at, comma separated (80, 120). An array in settings.json works too.' },
   'editor.matchBrackets': { def: true, type: 'boolean', title: 'Editor: Match Brackets', about: 'Highlight the bracket matching the one beside the caret. Brackets in strings and comments are skipped.' },
@@ -545,6 +556,9 @@ const editorDisplayOptions = () => ({
   lineHighlight: setting('editor.renderLineHighlight'), rulers: rulerColumns(setting('editor.rulers')), matchBrackets: setting('editor.matchBrackets'),
   occurrencesHighlight: setting('editor.occurrencesHighlight'), selectionHighlight: setting('editor.selectionHighlight'),
   overviewRuler: setting('editor.overviewRuler.enabled'), emptySelectionClipboard: setting('editor.emptySelectionClipboard'),
+  lineNumbers: setting('editor.lineNumbers'), minimap: setting('editor.minimap.enabled'), stickyScroll: setting('editor.stickyScroll.enabled'),
+  bracketPairColorization: setting('editor.bracketPairColorization.enabled'), colorDecorators: setting('editor.colorDecorators'),
+  cursorSurroundingLines: Math.max(0, Math.min(20, Math.trunc(Number(setting('editor.cursorSurroundingLines'))) || 0)),
 });
 
 // this browser's keeping from before the name was Sulfur, copied once
@@ -630,6 +644,17 @@ export function ideStart(w, open) {
   };
   build();
   registerCommands();
+  // files saved on their own (auto-save.js): after a delay, or as the focus leaves them
+  I.autoSave = autoSaver({ save: (t, mode) => {
+    if (!I || !I.tabs.includes(t) || !t.ed?.dirty() || !t.info?.ready || t.info.readOnly || t.info.bad) return;
+    (mode === 'afterDelay' ? Promise.resolve(t.ed.save()) : saveTab(t)).catch((err) => log(`auto save: ${err.message}`, 'Sulfur'));
+  } });
+  I.offs.push(() => I?.autoSave?.dispose());
+  const windowAway = () => { if (I) I.autoSave.focusLost(I.tabs.filter((t) => t.ed?.dirty()), setting('files.autoSave'), 'window'); };
+  addEventListener('blur', windowAway);
+  I.offs.push(() => removeEventListener('blur', windowAway));
+  const editorAway = (e) => { if (I && I.active?.ed?.dirty() && e.target.classList?.contains('code-ta') && !(e.relatedTarget && I.views.contains(e.relatedTarget))) I.autoSave.focusLost([I.active], setting('files.autoSave'), 'editor'); };
+  I.views.addEventListener('focusout', editorAway);
   applySettings();
   if (standalone) {
     const follow = () => { if (setting('window.appearance') === 'system') applySettings(); };
@@ -1153,8 +1178,10 @@ const MENUS = [
   ['View', () => [
     cmdItem('editor.action.toggleIndentationGuides', 'Indentation Guides', setting('editor.guides.indentation')),
     cmdItem('editor.action.toggleRenderWhitespace', 'Whitespace Markers', setting('editor.renderWhitespace') !== 'none'),
-    settingItem('editor.overviewRuler.enabled', 'Overview Ruler'), settingItem('editor.occurrencesHighlight', 'Occurrences Highlight'), '-',
-    cmdItem('workbench.action.toggleFullScreen', 'Full Screen', !!document.fullscreenElement), '-',
+    settingItem('editor.overviewRuler.enabled', 'Overview Ruler'), settingItem('editor.occurrencesHighlight', 'Occurrences Highlight'),
+    settingItem('editor.minimap.enabled', 'Minimap'), settingItem('editor.stickyScroll.enabled', 'Sticky Scroll'),
+    settingItem('editor.bracketPairColorization.enabled', 'Bracket Pair Colors'), cmdItem('editor.action.toggleRelativeLineNumbers', 'Relative Line Numbers', setting('editor.lineNumbers') === 'relative'), '-',
+    cmdItem('workbench.action.toggleFullScreen', 'Full Screen', !!document.fullscreenElement), cmdItem('workbench.action.toggleZenMode', 'Zen Mode', !!I.zen), '-',
     cmdItem('workbench.action.showCommands', 'Command Palette…'), '-',
     ...SIDE_VIEWS.map((v) => cmdItem(v.cmd, v.title, !I.st.side.hidden && I.st.side.view === v.id)), '-',
     cmdItem('workbench.actions.view.problems', 'Problems'), cmdItem('workbench.action.output.toggleOutput', 'Output'), cmdItem('workbench.action.terminal.toggleTerminal', 'Terminal'), '-',
@@ -2591,12 +2618,18 @@ async function formatActive(whole = true) {
     const options = formattingOptions();
     const result = await languages.request(t, 'formatting', { options: { tabSize: options.tabSize, insertSpaces: options.insertSpaces } });
     if (I !== state || !I.tabs.includes(t) || t.ed.text() !== before || result?.stale) { if (I === state) notify('info', 'The file changed while formatting. Format again.'); return; }
-    let text = result?.value ? applyTextEdits(before, result.value) : before;
+    const served = result?.value ? applyTextEdits(before, result.value) : before;
+    let text = served;
     const lang = codeLang(t.rel || t.localName);
     const parser = await parserFor(lang?.check);
-    text = formatWhitespace(text, lang?.hl, { ...options, preserveContinuation: !!result }, parser?.parse(text), parser ? (source) => parser.parse(source) : null);
+    // the editor's own tree for the text as it stands, parsed already, rather than once more
+    const tree = parser ? (text === before && await t.ed.syntaxTree()) || parser.parse(text) : undefined;
+    if (I !== state || !I.tabs.includes(t) || t.ed.text() !== before) return;
+    text = formatWhitespace(text, lang?.hl, { ...options, preserveContinuation: !!result }, tree, parser ? (source) => parser.parse(source) : null);
     if (I !== state || !I.tabs.includes(t) || t.ed.text() !== before || t.info?.readOnly) return;
-    const edits = formattingEdits(before, text);
+    // the server's edits as it sent them when the whitespace pass left its text alone: each
+    // where it is, as VS Code applies them, rather than a diff of the whole file
+    const edits = result?.value && text === served ? textEditRanges(before, result.value).filter((e) => before.slice(e.from, e.to) !== e.text).sort((x, y) => x.from - y.from) : formattingEdits(before, text);
     if (!result && text === before && !['csharp', 'c', 'cpp', 'java', 'javascript', 'typescript', 'rust', 'css', 'scss', 'json'].includes(lang?.hl)) {
       notify('info', 'Install a formatting-capable language extension in Extensions for this file.'); return;
     }
@@ -2741,6 +2774,7 @@ function tabState(t, info) {
     notify('info', `${t.title} is a Git LFS pointer, not the file’s content.`, { actions: [{ label: 'Pull LFS Files', run: () => scmLfsPull() }] });
   }
   if (info.dirty && t.preview) pin(t);
+  if (!was || was.dirty !== info.dirty || (info.dirty && was.length !== info.length)) I.autoSave?.changed(t, info.dirty && info.ready && !info.readOnly && !info.bad, setting('files.autoSave'), setting('files.autoSaveDelay'));
   if (!was || was.dirty !== info.dirty) t.tabEl.classList.toggle('dirty', info.dirty);
   // typing moves every diagnostic after the caret: the problems list redrawn when what it
   // shows changed (a line, a column, a message), the explorer only when the counts did
@@ -2827,6 +2861,7 @@ function activate(t, focus = true) {
   }
   I.mru = [t, ...I.mru.filter((x) => x !== t)];
   if (t !== was) navNote(t);
+  if (t !== was && was?.ed?.dirty()) I.autoSave?.focusLost([was], setting('files.autoSave'), 'editor');
   for (const x of I.tabs) {
     x.view.hidden = x !== t;
     x.tabEl.classList.toggle('on', x === t);
@@ -3612,6 +3647,23 @@ function onKey(e) {
   run(c.id);
 }
 
+// Zen mode: the text alone, the bars and side views put away until it's toggled back
+function toggleZen() {
+  if (!I) return;
+  if (I.zen) {
+    const z = I.zen;
+    I.zen = null;
+    I.root.classList.remove('ide-zen');
+    showSide(z.side.view, !z.side.hidden); showPanel(z.panel.view, !z.panel.hidden); showAux(!z.aux.hidden);
+  } else {
+    I.zen = { side: { ...I.st.side }, panel: { ...I.st.panel }, aux: { ...I.st.aux } };
+    I.root.classList.add('ide-zen');
+    showSide(I.st.side.view, false); showPanel(I.st.panel.view, false); showAux(false);
+  }
+  paintLayout();
+  focusActive();
+}
+
 function registerCommands() {
   const C = command;
   C('sulfur.sqlite.create', 'SQLite: Create Database in Project…', createSQLite, { category: 'SQLite' });
@@ -3698,6 +3750,19 @@ function registerCommands() {
   C('inlineChat.start', 'Ask the Agent About the Selection', () => askSelection(), { key: 'ctrl+i', when: hasEd, category: 'Chat' });
   C('sulfur.completion.toggleAgent', 'Toggle Agent Code Completions', () => setSetting('editor.inlineSuggest.enabled', !setting('editor.inlineSuggest.enabled')), { category: 'Completion' });
   C('editor.action.toggleIndentationGuides', 'Toggle Indentation Guides', () => setSetting('editor.guides.indentation', !setting('editor.guides.indentation')), { category: 'View' });
+  C('editor.action.toggleMinimap', 'Toggle Minimap', () => setSetting('editor.minimap.enabled', !setting('editor.minimap.enabled')), { category: 'View' });
+  C('editor.action.toggleStickyScroll', 'Toggle Sticky Scroll', () => setSetting('editor.stickyScroll.enabled', !setting('editor.stickyScroll.enabled')), { category: 'View' });
+  C('editor.action.toggleBracketPairColorization', 'Toggle Bracket Pair Colorization', () => setSetting('editor.bracketPairColorization.enabled', !setting('editor.bracketPairColorization.enabled')), { category: 'View' });
+  C('editor.action.toggleRelativeLineNumbers', 'Toggle Relative Line Numbers', () => setSetting('editor.lineNumbers', setting('editor.lineNumbers') === 'relative' ? 'on' : 'relative'), { category: 'View' });
+  C('workbench.action.toggleZenMode', 'Toggle Zen Mode', () => toggleZen(), { key: 'ctrl+k z', category: 'View' });
+  C('workbench.action.files.toggleAutoSave', 'Toggle Auto Save', () => setSetting('files.autoSave', setting('files.autoSave') === 'off' ? 'afterDelay' : 'off'), { category: 'File' });
+  // several cursors, VS Code's keys: the next match, every match, a line above or below, each line's end
+  C('editor.action.addSelectionToNextFindMatch', 'Add Selection to Next Find Match', () => I.active.ed.addNextMatch(), { key: 'ctrl+d', when: hasEd, category: 'Selection' });
+  C('editor.action.selectHighlights', 'Select All Occurrences of Find Match', () => I.active.ed.selectAllMatches(), { key: 'ctrl+shift+l', when: hasEd, category: 'Selection' });
+  C('editor.action.insertCursorAbove', 'Add Cursor Above', () => I.active.ed.addCursorLine(-1), { key: 'ctrl+alt+up', when: hasEd, category: 'Selection' });
+  C('editor.action.insertCursorBelow', 'Add Cursor Below', () => I.active.ed.addCursorLine(1), { key: 'ctrl+alt+down', when: hasEd, category: 'Selection' });
+  C('editor.action.insertCursorAtEndOfEachLineSelected', 'Add Cursors to Line Ends', () => I.active.ed.addCursorsAtLineEnds(), { key: 'shift+alt+i', when: hasEd, category: 'Selection' });
+  C('removeSecondaryCursors', 'Remove Secondary Cursors', () => I.active.ed.clearCursors(), { key: 'escape', when: () => (I.active?.ed?.cursorCount() || 0) > 0 && edFocused(), hidden: true });
   C('editor.action.toggleRenderWhitespace', 'Toggle Whitespace Markers', () => setSetting('editor.renderWhitespace', setting('editor.renderWhitespace') === 'none' ? 'all' : 'none'), { key: 'ctrl+r ctrl+w', category: 'View' });
   C('workbench.action.togglePanel', 'Toggle Panel Visibility', () => showPanel(I.st.panel.view, I.st.panel.hidden), { key: 'ctrl+j', category: 'View', shell: true });
   C('workbench.action.toggleMaximizedPanel', 'Toggle Maximized Panel', () => { I.st.panel.max = !I.st.panel.max; showPanel(I.st.panel.view, true); }, { category: 'View' });
@@ -5868,7 +5933,7 @@ function paintStatusNow() {
   S.host.hidden = !t?.rel;
   if (t?.rel) sbPut(S.host, t.host, () => [icon('host'), el('span', '', t.host)]);
   if (code) {
-    sbSet(S.pos, 'textContent', `Ln ${info.line}, Col ${info.col}${info.sel ? ` (${info.sel} selected)` : ''}`);
+    sbSet(S.pos, 'textContent', `Ln ${info.line}, Col ${info.col}${info.cursors ? ` (${info.cursors + 1} selections)` : info.sel ? ` (${info.sel} selected)` : ''}`);
     sbSet(S.indent, 'textContent', info.indent === 'tab' ? `Tab Size: ${formattingOptions().tabSize}` : `Spaces: ${info.indent}`);
     sbSet(S.enc, 'textContent', 'UTF-8');
     sbSet(S.eol, 'textContent', info.eol);
@@ -8893,6 +8958,10 @@ function applySettings() {
   // and the highlighted text under it, the two drifting apart a pixel every 64 lines
   r.style.setProperty('--ide-code-lh', `${Math.max(1, Math.round(Number(setting('editor.fontSize')) * 1.55)) || 20}px`);
   r.style.setProperty('--ide-tab-size', String(formattingOptions().tabSize));
+  const family = String(setting('editor.fontFamily') || '').trim();
+  if (family) r.style.setProperty('--ide-code-family', family); else r.style.removeProperty('--ide-code-family');
+  r.style.setProperty('--ide-code-ligatures', setting('editor.fontLigatures') ? 'normal' : 'none');
+  r.classList.toggle('ide-zen', !!I.zen);
   for (const t of I.tabs) if (t.ed) t.ed.show(true);
   languages.cancelCompletions();
   paintLayout();
@@ -10400,7 +10469,10 @@ const VSCODE_VARS = {
   'textLink-activeForeground': '--ide-link', descriptionForeground: '--ide-muted', disabledForeground: '--ide-dim', errorForeground: '--ide-err', 'editorError-foreground': '--ide-err',
   'editorWarning-foreground': '--ide-warn', 'editorInfo-foreground': '--ide-info', 'badge-background': '--ide-badge', 'badge-foreground': '--ide-badge-fg',
   'editorWidget-background': '--ide-widget', 'editorWidget-border': '--ide-widget-border', 'menu-background': '--ide-widget', 'menu-foreground': '--ide-fg',
-  'toolbar-hoverBackground': '--ide-hover', 'editor-selectionBackground': '--ide-ed-sel', 'editorLineNumber-foreground': '--ide-line-nr', 'tab-activeBackground': '--ide-bg',
+  'toolbar-hoverBackground': '--ide-hover', 'editor-selectionBackground': '--ide-ed-sel',
+  'editorBracketHighlight-foreground1': '--ide-bracket-1', 'editorBracketHighlight-foreground2': '--ide-bracket-2', 'editorBracketHighlight-foreground3': '--ide-bracket-3',
+  'editorBracketHighlight-unexpectedBracket-foreground': '--ide-bracket-unexpected', 'editorStickyScroll-background': '--ide-sticky-bg', 'editorStickyScroll-shadow': '--ide-sticky-shadow',
+  'minimap-background': '--ide-minimap-bg', 'minimapSlider-background': '--ide-minimap-slider', 'editorLineNumber-foreground': '--ide-line-nr', 'tab-activeBackground': '--ide-bg',
   'tab-inactiveBackground': '--ide-side', 'tab-activeForeground': '--ide-strong', 'tab-inactiveForeground': '--ide-muted', 'scrollbarSlider-background': '--ide-scroll',
   'scrollbarSlider-hoverBackground': '--ide-scroll', 'scrollbarSlider-activeBackground': '--ide-scroll', 'textCodeBlock-background': '--ide-side', 'textPreformat-foreground': '--ide-fg',
   'keybindingLabel-background': '--ide-second', 'keybindingLabel-foreground': '--ide-fg', 'notifications-background': '--ide-widget', 'quickInput-background': '--ide-widget',

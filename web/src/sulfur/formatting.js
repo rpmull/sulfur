@@ -4,8 +4,12 @@ const LANGUAGES = new Set(['csharp', 'c', 'cpp', 'java', 'javascript', 'typescri
 
 // This pass changes whitespace only. Language servers handle syntax-specific
 // formatting first; literal/comment contents are kept byte for byte here.
+// (a sticky match at the offset: a slice of the rest of the file for every character read
+// made formatting a long file take seconds)
+const LITERAL_START = /(?:\$*@?\$?|@\$)?("{3,}|"|')/y;
 function literalEnd(text, at) {
-  const start = text.slice(at).match(/^(?:\$*@?\$?|@\$)?("{3,}|"|')/);
+  LITERAL_START.lastIndex = at;
+  const start = LITERAL_START.exec(text);
   if (!start) return null;
   const quote = start[1], verbatim = start[0].includes('@'), interpolated = start[0].includes('$');
   let i = at + start[0].length;
@@ -44,6 +48,9 @@ function protectedSpans(text, tree) {
   // interpolated and raw literals without interpreting their contents.
   for (let i = 0; i < text.length;) {
     const from = i;
+    const c = text.charCodeAt(i);
+    // only a slash, a hash, a quote, a dollar or an at can open anything looked for here
+    if (c !== 47 && c !== 35 && c !== 34 && c !== 39 && c !== 36 && c !== 64) { i++; continue; }
     if (text.startsWith('//', i) || (text[i] === '#' && !text.slice(text.lastIndexOf('\n', i - 1) + 1, i).trim())) {
       const end = text.indexOf('\n', i); i = end < 0 ? text.length : end;
     } else if (text.startsWith('/*', i)) {
@@ -124,27 +131,39 @@ export function formatWhitespace(text, language, options, tree, parse) {
     if (insideLiteral || !line.trim()) return line;
     return unit.repeat(indent) + (options.insertSpaces ? ' '.repeat(continuation) : '\t'.repeat(Math.floor(continuation / options.tabSize)) + ' '.repeat(continuation % options.tabSize)) + line.replace(/^[\t ]*/, '');
   }).join(eol);
+  if (formatted === text) return text;
   // Whitespace can carry meaning (notably JS automatic semicolon insertion).
   // Keep the server's/source text if a local style would change its syntax tree.
   return tree && parse && tree.toString() !== parse(formatted).toString() ? original : formatted;
 }
 
-export function formattingEdits(before, after) {
+// The edits taking before to after, each a run of whitespace (or, where a formatter
+// changed a token too, the words that differ), so the editor, its history and the others'
+// carets move by the formatting alone and the rest of the file stays as it was. Past limit
+// edits (a formatter that rewrote the file) one edit between the common ends instead.
+export function formattingEdits(before, after, limit = 5000) {
   const edits = [];
+  const ws = (c) => c === 32 || c === 10 || c === 9 || c === 13;
   let a = 0, b = 0;
   while (a < before.length || b < after.length) {
-    if (before[a] === after[b]) { a++; b++; continue; }
+    if (a < before.length && b < after.length && before.charCodeAt(a) === after.charCodeAt(b)) { a++; b++; continue; }
     const from = a, start = b;
-    while (a < before.length && /\s/.test(before[a])) a++;
-    while (b < after.length && /\s/.test(after[b])) b++;
-    if (a === from && b === start || before[a] !== after[b]) {
-      // A formatter occasionally normalizes a token too. Retain common ends.
-      let tail = 0;
-      while (tail < before.length - from && tail < after.length - start && before[before.length - tail - 1] === after[after.length - tail - 1]) tail++;
-      edits.push({ from, to: before.length - tail, text: after.slice(start, after.length - tail) });
-      return edits;
+    while (a < before.length && ws(before.charCodeAt(a))) a++;
+    while (b < after.length && ws(after.charCodeAt(b))) b++;
+    const ended = (a >= before.length) !== (b >= after.length);
+    if ((a === from && b === start) || ended || (a < before.length && b < after.length && before.charCodeAt(a) !== after.charCodeAt(b))) {
+      // not whitespace alone: the differing words taken whole, and what follows them
+      while (a < before.length && !ws(before.charCodeAt(a))) a++;
+      while (b < after.length && !ws(after.charCodeAt(b))) b++;
     }
     edits.push({ from, to: a, text: after.slice(start, b) });
+    if (edits.length > limit) {
+      let head = 0, tail = 0;
+      const max = Math.min(before.length, after.length);
+      while (head < max && before.charCodeAt(head) === after.charCodeAt(head)) head++;
+      while (tail < max - head && before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)) tail++;
+      return [{ from: head, to: before.length - tail, text: after.slice(head, after.length - tail) }];
+    }
   }
   return edits;
 }

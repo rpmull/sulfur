@@ -3,14 +3,32 @@ import { commonEnds } from './text-operations.js';
 // One cache per editor. Highlighting, diagnostics and navigation share its tree.
 // The tree may cover only the text's start (parseTo: what's on screen first, the rest in
 // slices while the page is idle, as CodeMirror parses); parse() always finishes it.
+// ops as the changed ranges a parse carries its pieces across: sorted, touching ones joined
+export function opChanges(ops) {
+  const changes = [];
+  let a = 0, b = 0;
+  const add = (c) => { const last = changes[changes.length - 1]; if (last && last.toA === c.fromA) { last.toA = c.toA; last.toB = c.toB; } else changes.push(c); };
+  for (const o of ops) {
+    if (typeof o === 'string') { add({ fromA: a, toA: a, fromB: b, toB: b + o.length }); b += o.length; }
+    else if (o > 0) { a += o; b += o; }
+    else { add({ fromA: a, toA: a - o, fromB: b, toB: b }); a -= o; }
+  }
+  return changes;
+}
+
 export function createSyntaxCache(TreeFragment) {
   // the text the tree was made for, how far into it the tree reaches, and the tree's pieces
   // kept for the next parse to reuse
   let previous = '', tree = null, grammar = null, reach = 0, fragments = [];
+  // an edit of many places at once (a format, a replace all) as its maker knows it: the pieces
+  // between its places are reused, where one span from the first to the last would have had
+  // nearly the whole file parsed again
+  let noted = null;
   // the pieces of the last parse moved onto text, through what changed since
   const carried = (parser, text) => {
     if (!tree || grammar !== parser) return [];
     if (previous === text) return fragments;
+    if (noted && noted.before === previous && noted.after === text) return TreeFragment.applyChanges(fragments, noted.changes);
     const { head: from, tail } = commonEnds(previous, text);
     return TreeFragment.applyChanges(fragments, [{ fromA: from, toA: previous.length - tail, fromB: from, toB: text.length - tail }]);
   };
@@ -42,6 +60,8 @@ export function createSyntaxCache(TreeFragment) {
     },
     // the whole tree when it's already been parsed for this text, else null: never parses
     current(parser, text) { return tree && grammar === parser && previous === text && reach >= text.length ? tree : null; },
+    // before became after by ops (text-operations.js): their places kept for the next parse
+    noteEdits(before, after, ops) { noted = { before, after, changes: opChanges(ops) }; },
     clear() { tree = null; grammar = null; previous = ''; reach = 0; fragments = []; },
   };
 }

@@ -30,6 +30,12 @@ import { wordStart, wordEnd } from './completion.js';
 import { textWindow } from './text-window.js';
 import { contributedLang } from './vsx-contributions.js';
 import { mountHoverIntent } from './hover-intent.js';
+import { nextMatch, allMatches, replicateEdit, moveCursors, moveCursorsVertically, cursorBeside, cursorsAtLineEnds, normalizeCursors, rebaseCursors } from './multi-cursor.js';
+import { bracketRanges, bracketStateIndex, skipSpansFromTree, skipSpansFromRanges, mergeRanges } from './bracket-colors.js';
+import { stickyLines, STICKY_MAX } from './sticky-scroll.js';
+import { minimapLayout, minimapRuns, minimapScrollFor } from './minimap.js';
+import { lineNumberLabels } from './line-numbers.js';
+import { colorLiterals, COLOR_LANGS } from './color-decorators.js';
 
 // --- code editor ------------------------------------------------------------------
 // a share's text or code file in a tab of its own, joined to the file's live
@@ -101,7 +107,11 @@ function codeEditor(view, file, btn, id, opts = {}) {
   const nrNow = el('div', 'code-nr-now');
   // the overview ruler over the scrollbar: problems, matches, bookmarks, the caret, the whole file at once
   const overview = el('canvas', 'code-overview');
-  for (const layer of [deco, nrNow, overview]) layer.setAttribute('aria-hidden', 'true');
+  // the minimap beside the text, the file at a glance, and the sticky lines over its top:
+  // the scopes the view is inside, held there as it scrolls away from them
+  const minimap = Object.assign(el('canvas', 'code-minimap'), { hidden: true });
+  const sticky = Object.assign(el('div', 'code-sticky'), { hidden: true });
+  for (const layer of [deco, nrNow, overview, sticky]) layer.setAttribute('aria-hidden', 'true');
   gutter.append(nrNow);
   body.append(deco, agentL, finds, pre, guidesLayer, squig, inlineLayer, definitionLayer, ta);
   scroller.append(gutter, body);
@@ -117,7 +127,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
   // markdown rendered, each block its source again on a double click
   const mdView = Object.assign(el('div', 'code-md'), { hidden: true, tabIndex: -1 });
   mdView.dataset.notePath = file.path;
-  view.append(bar, scroller, mdView, out, overview);
+  view.append(bar, scroller, mdView, out, overview, minimap, sticky);
   const diskNotice = Object.assign(el('div', 'code-disk-notice'), { hidden: true });
   const diskMessage = el('span');
   const diskCompare = el('details');
@@ -312,6 +322,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     if (ta.readOnly) return false;
     const next = history.step(ta.value, [ta.selectionStart, ta.selectionEnd], redo);
     if (!next) return false;
+    setCursors([], null);
     ta.value = next.text;
     historyText = ta.value;
     ta.setSelectionRange(...next.selection);
@@ -343,7 +354,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
   // the text last drawn, and the window of it drawn
   let shownText = null;
   let drawn = { first: 0, last: 0, from: 0, to: 0, lines: 1, lh: 18 };
-  let wantCaret = false;
+  let wantCaret = false, wantCenter = false;
   // what changed between two texts, worked out once for every layer that moves with it
   let lastChange = null;
   const changeOf = (before, after) => {
@@ -386,6 +397,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     lastTextChange = Date.now();
     hideDiagnosticHover();
     const moved = { head: change.head, tail: change.tail, before: before.length };
+    if (cursors.length && cursorsText !== text) setCursors(rebaseCursors(cursors, cursorsText, text, cursorsText === before ? change : undefined), text);
     if (errsText === before) { errs = rebaseDiagnostics(errs, moved, text.length - before.length); errsText = text; }
     if (languageErrors && languageErrorsText === before) { languageErrors = rebaseDiagnostics(languageErrors, moved, text.length - before.length); languageErrorsText = text; }
   }
@@ -430,6 +442,10 @@ function codeEditor(view, file, btn, id, opts = {}) {
   // hidden, would leave the drawn window somewhere the view isn't (lines missing)
   const scrollTo = (top, left = metrics.left) => {
     if (!scroller.clientHeight) { hiddenScroll = { top: Math.max(0, top), left: Math.max(0, left) }; return; }
+    // shown again and scrolled before its size was read (a jump into a tab just activated): the
+    // place kept while hidden gives way, or it would put the view back there a frame later
+    hiddenScroll = null;
+    if (!metrics.height) { metrics.height = scroller.clientHeight; metrics.width = scroller.clientWidth; }
     if (top !== metrics.top) { scroller.scrollTop = Math.max(0, top); metrics.top = scroller.scrollTop; }
     if (left !== metrics.left) { scroller.scrollLeft = Math.max(0, left); metrics.left = scroller.scrollLeft; }
   };
@@ -497,18 +513,41 @@ function codeEditor(view, file, btn, id, opts = {}) {
       else if (lang.hl !== 'plaintext' && text.length <= SERVER_HL_MAX) serverHighlight(text);
       if (lexicalDirty && lang.hl !== 'plaintext' && lang.hl !== 'markdown') colors = quickColors(text, w);
     }
-    paintLines(text, colors, w);
+    paintLines(text, bracketTokens(text, colors, w, parser), w);
     placeWindow(code, w);
-    const numsKey = `${w.first}|${w.last}|${w.lines}|${w.lh}`;
-    if (numsKey !== numsDrawn) {
-      numsDrawn = numsKey;
-      numsWin.textContent = Array.from({ length: w.last - w.first }, (_, i) => w.first + i + 1).join('\n');
-      numsWin.style.paddingTop = `${w.first * w.lh}px`; numsWin.style.paddingBottom = `${(w.lines - w.last) * w.lh}px`;
-      numsWin.style.minWidth = `${String(w.lines).length}ch`;
-    }
+    paintNums(w);
     hlText = text;
     paintSquiggles(); paintFinds(); paintAgent();
     if (inlineSuggestion) paintInline();
+    minimapSoon(); stickySoon();
+  }
+  // the gutter's numbers for the window: absolute, relative to the caret's line, every tenth
+  // or none (editor.lineNumbers), drawn again only when what they'd show changed
+  function paintNums(w = drawn) {
+    const mode = (opts.display?.() || {}).lineNumbers || 'on';
+    const caretLine = mode === 'on' || mode === 'off' ? -1 : lineAt(ta.value, headOf(selNow())) - 1;
+    const numsKey = `${w.first}|${w.last}|${w.lines}|${w.lh}|${mode}|${caretLine}`;
+    if (numsKey === numsDrawn) return;
+    numsDrawn = numsKey;
+    numsWin.textContent = lineNumberLabels(w.first, w.last, caretLine, mode);
+    numsWin.style.paddingTop = `${w.first * w.lh}px`; numsWin.style.paddingBottom = `${(w.lines - w.last) * w.lh}px`;
+    numsWin.style.minWidth = mode === 'off' ? '0' : `${String(w.lines).length}ch`;
+  }
+  // --- bracket pairs colored by their nesting (bracket-colors.js), the window's brackets laid
+  // over the semantic tokens; the openers still open where the window begins kept by an index
+  // so a keystroke scans from its nearest mark, never from the top of the file ---
+  const bracketIndex = bracketStateIndex();
+  function bracketTokens(text, colors, w, parser) {
+    const display = opts.display?.() || {};
+    if (display.bracketPairColorization === false || lang.hl === 'plaintext' || lang.hl === 'markdown' || text.length > HL_MAX) return semantic;
+    // strings and comments looked past: the tree's when it's for this text, else the colors'
+    const treeFor = parser && lexParsedText === text ? (to) => syntax.parseTo(parser, text, to, 0).tree : null;
+    const skipFor = treeFor ? (a, b) => skipSpansFromTree(treeFor(b), a, b) : (a, b) => skipSpansFromRanges(colors, a, b);
+    const was = bracketIndex.text();
+    const stack = bracketIndex.stateAt(text, w.from, skipFor, was !== null && was !== text ? changeOf(was, text) : null);
+    const brackets = bracketRanges(text, w.from, w.to, stack, skipFor(w.from, w.to));
+    if (!brackets.length) return semantic;
+    return mergeRanges(semantic.slice(rangeIndex(semantic, w.from), rangeIndex(semantic, w.to) + 1), brackets);
   }
   // the parse finished a slice at a time, the page answering between: then the brackets and
   // the syntax check, which need the whole tree, see it
@@ -529,7 +568,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
       const text = ta.value, parser = !closed && text.length <= HL_MAX && parserNow(lang.check);
       if (!parser) return;
       if (!syntax.parseTo(parser, text, 0, 8).complete) restTimer = setTimeout(slice, 0);
-      else decoSoon();
+      else { decoSoon(); minimapSoon(); stickySoon(); }
     };
     restTimer = setTimeout(slice, 0);
   }
@@ -611,6 +650,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
       const first = Math.floor(top / g.lh), last = Math.ceil((top + metrics.height) / g.lh);
       const ahead = Math.max(10, (last - first) >> 1);
       if ((drawn.first > 0 && first - ahead < drawn.first) || (drawn.last < drawn.lines && last + ahead > drawn.last)) { paintText(); paintMarks(); paintDeco(); }
+      minimapSoon(); stickySoon();
     });
   }, { passive: true });
   let guideFrame = 0, guideSnapshot = null;
@@ -669,7 +709,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     }
     const taller = scroller.clientHeight > metrics.height;
     Object.assign(metrics, { top: scroller.scrollTop, left: scroller.scrollLeft, height: scroller.clientHeight, width: scroller.clientWidth, gutter: gutter.offsetWidth });
-    guidesSoon();
+    guidesSoon(); minimapSoon(); stickySoon();
     if (hlText !== null && taller) redraw(true);
   });
   guideResize.observe(scroller); guideResize.observe(gutter);
@@ -746,7 +786,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     paintDeco();
     guidesSoon();
     if (changed) checkSoon();
-    if (wantCaret) { wantCaret = false; caretInView(); }
+    if (wantCaret) { wantCaret = false; caretInView(wantCenter); wantCenter = false; }
   }
   function setInlineSuggestion(value) {
     inlineSuggestion = value;
@@ -834,12 +874,30 @@ function codeEditor(view, file, btn, id, opts = {}) {
       clearTimeout(occurrenceTimer);
       if (ready) occurrenceTimer = setTimeout(findOccurrences, 250);
     }
+    // the other cursors (multi-cursor.js): each selection lit, a caret at each active end
+    if (cursors.length && cursorsText === text) {
+      const focused = document.activeElement === ta;
+      for (const c of cursors) {
+        const a = Math.min(c.anchor, c.head), b = Math.max(c.anchor, c.head);
+        if (b < drawn.from || a > drawn.to) continue;
+        if (b > a) marks.push({ from: a, to: b, wrap: (raw) => `<mark class="sel">${esc(raw)}</mark>` });
+        if (focused && !ta.readOnly) marks.push({ from: c.head, to: c.head, wrap: () => '<span class="code-extra-caret"></span>' });
+      }
+    }
+    // a stylesheet's colors shown under themselves (color-decorators.js)
+    if (display.colorDecorators !== false && COLOR_LANGS.has(lang.hl) && text.length <= HL_MAX) {
+      if (colorsAt?.text !== text || colorsAt.from !== drawn.from || colorsAt.to !== drawn.to) colorsAt = { text, from: drawn.from, to: drawn.to, list: colorLiterals(text, drawn.from, drawn.to, isCode(text)) };
+      for (const { from, to, color } of colorsAt.list) marks.push({ from, to, wrap: (raw) => `<mark class="swatch" style="--swatch:${color.replace(/["'<>&]/g, '')}">${esc(raw)}</mark>` });
+    }
+    if (numsDrawn && !/\|(on|off)\|/.test(numsDrawn)) paintNums();
     // a selection the textarea doesn't hold (text-window.js), drawn here instead, over the rest
     if (tw?.away() && s !== e) { for (let i = marks.length - 1; i >= 0; i--) if (marks[i].to > s && marks[i].from < e) marks.splice(i, 1); marks.push({ from: s, to: e, wrap: (raw) => `<mark class="sel">${esc(raw)}</mark>` }); }
-    marks.sort((a, b) => a.from - b.from);
+    // zero-width marks (the carets) before any mark starting where they stand
+    marks.sort((a, b) => a.from - b.from || (a.to - a.from) - (b.to - b.from));
     if (marks.length) { decoWin.innerHTML = markedHtml(text, marks, drawn); placeWindow(decoWin, drawn); } else if (decoWin.firstChild) decoWin.textContent = '';
     overviewSoon();
   }
+  let colorsAt = null;
 
   // --- the overview ruler: the whole file's problems, matches, bookmarks and caret at a glance ---
   let overviewFrame = 0, overviewColors = null, overviewEpoch = -1;
@@ -877,6 +935,141 @@ function codeEditor(view, file, btn, id, opts = {}) {
     c.globalAlpha = 1;
   }
 
+  // --- the minimap (minimap.js): the file's lines drawn tiny on a canvas beside the text, a
+  // slider over the part on screen, clicked or dragged to scroll; a long file slides through ---
+  const MINIMAP_W = 90, MINIMAP_ROW = 2;
+  let minimapFrame = 0, minimapColors = new Map(), minimapRows = null, minimapDrag = null, minimapLast = null;
+  const minimapSoon = () => { minimapFrame ||= requestAnimationFrame(paintMinimap); };
+  // a token class's color as the stylesheet draws it in the text, read once per theme
+  function minimapColor(cls) {
+    if (minimapColors.has(cls)) return minimapColors.get(cls);
+    const probe = Object.assign(document.createElement('span'), { className: cls });
+    probe.style.display = 'none';
+    pre.append(probe);
+    const color = getComputedStyle(probe).color || '#888';
+    probe.remove();
+    minimapColors.set(cls, color);
+    return color;
+  }
+  // the colors for lines first..last of text: the whole tree's when it's parsed, else what the
+  // window has; a grammar without a parser has the server's or the grammar's for the whole text
+  function colorsFor(text, first, last) {
+    lineAt(text, 0);
+    const from = lineStarts[first] ?? text.length, to = last < lineStarts.length ? lineStarts[last] : text.length;
+    const parser = text.length <= HL_MAX && parserNow(lang.check);
+    if (parser) {
+      const tree = syntax.current(parser, text);
+      if (tree) return syntaxRanges(parser, text, tree, from, to);
+      return lexState?.ranges || [];
+    }
+    return lexical;
+  }
+  function paintMinimap() {
+    minimapFrame = 0;
+    const display = opts.display?.() || {};
+    const on = display.minimap !== false && ready && !closed && !view.hidden && !rendered;
+    scroller.classList.toggle('code-has-minimap', on);
+    if (!on) { if (!minimap.hidden) { minimap.hidden = true; minimapRows = null; } return; }
+    const h = metrics.height;
+    if (!h) return;
+    minimap.hidden = false;
+    const dpr = window.devicePixelRatio || 1;
+    setStyle(minimap, 'top', `${scroller.offsetTop}px`); setStyle(minimap, 'height', `${h}px`); setStyle(minimap, 'width', `${MINIMAP_W}px`);
+    if (minimap.width !== Math.round(MINIMAP_W * dpr) || minimap.height !== Math.round(h * dpr)) { minimap.width = Math.round(MINIMAP_W * dpr); minimap.height = Math.round(h * dpr); }
+    const text = ta.value, g = geom();
+    lineAt(text, 0);
+    const layout = minimapLayout({ lines: lineStarts.length, lineHeight: g.lh, scrollTop: metrics.top, viewHeight: h, height: h, rowHeight: MINIMAP_ROW });
+    minimapLast = layout;
+    // the runs kept for a band around the lines shown, made again only when the view leaves it
+    const want = { first: layout.first, last: layout.first + layout.count };
+    if (!minimapRows || minimapRows.text !== text || want.first < minimapRows.first || want.last > minimapRows.last || minimapRows.epoch !== fontEpoch) {
+      const first = Math.max(0, want.first - layout.count), last = Math.min(lineStarts.length, want.last + layout.count);
+      minimapRows = { text, first, last, epoch: fontEpoch, rows: minimapRuns(text, lineStarts, first, last, colorsFor(text, first, last), MINIMAP_W, g.tab) };
+    }
+    const c = minimap.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, MINIMAP_W, h);
+    const plain = minimapColor('code-minimap-plain');
+    for (let i = 0; i < layout.count; i++) {
+      const runs = minimapRows.rows[layout.first + i - minimapRows.first];
+      if (!runs) continue;
+      const y = i * MINIMAP_ROW;
+      for (const [col, len, cls] of runs) {
+        c.fillStyle = cls ? minimapColor(cls) : plain;
+        c.globalAlpha = cls ? 0.8 : 0.55;
+        c.fillRect(col, y, len, MINIMAP_ROW - 0.5);
+      }
+    }
+    c.globalAlpha = minimapDrag ? 0.22 : 0.12;
+    c.fillStyle = minimapColor('code-minimap-slider');
+    c.fillRect(0, Math.max(0, layout.sliderTop), MINIMAP_W, Math.max(4, layout.sliderHeight));
+    c.globalAlpha = 1;
+  }
+  // a press on the slider drags the view with it; elsewhere, the line pressed is brought mid-view
+  minimap.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || !minimapLast) return;
+    e.preventDefault();
+    const g = geom(), rect = minimap.getBoundingClientRect(), y = e.clientY - rect.top, layout = minimapLast;
+    if (y >= layout.sliderTop && y <= layout.sliderTop + layout.sliderHeight) minimapDrag = { grab: y - layout.sliderTop };
+    else { scrollTo(minimapScrollFor(layout, y, { lineHeight: g.lh, viewHeight: metrics.height, rowHeight: MINIMAP_ROW })); minimapDrag = { grab: layout.sliderHeight / 2 }; }
+    const move = (ev) => {
+      if (!minimapDrag || !minimapLast) return;
+      const top = ev.clientY - rect.top - minimapDrag.grab;
+      scrollTo((minimapLast.first + top / MINIMAP_ROW) * geom().lh);
+    };
+    const up = () => { minimapDrag = null; removeEventListener('mousemove', move); removeEventListener('mouseup', up); minimapSoon(); };
+    addEventListener('mousemove', move); addEventListener('mouseup', up);
+    minimapSoon();
+  });
+
+  // --- sticky scroll (sticky-scroll.js): the lines opening the scopes the top of the view is
+  // in, held over it as it scrolls past them; a click on one scrolls to it ---
+  let stickyFrame = 0, stickyKey = '', stickyText = null;
+  const stickySoon = () => { stickyFrame ||= requestAnimationFrame(paintSticky); };
+  function hideSticky() { if (!sticky.hidden) { sticky.hidden = true; sticky.replaceChildren(); } stickyKey = ''; }
+  function paintSticky() {
+    stickyFrame = 0;
+    const display = opts.display?.() || {};
+    const text = ta.value;
+    const parser = display.stickyScroll !== false && ready && !closed && !view.hidden && !rendered && text.length <= HL_MAX && parserNow(lang.check);
+    if (!parser || !metrics.height) { hideSticky(); return; }
+    const g = geom();
+    lineAt(text, 0);
+    const topLine = Math.floor((metrics.top - g.top) / g.lh);
+    if (topLine <= 0) { hideSticky(); return; }
+    // the tree as far as the lines that could be held, parsed already for the view above them
+    const upto = lineStarts[Math.min(lineStarts.length - 1, topLine + STICKY_MAX)] ?? text.length;
+    const tree = syntax.parseTo(parser, text, upto, 0).tree;
+    const lines = stickyLines(tree, text, lineStarts, topLine);
+    if (!lines.length) { hideSticky(); return; }
+    const key = `${lines.join(',')}|${metrics.left}|${metrics.gutter}|${g.lh}|${g.cw}|${g.left}|${text === stickyText ? '' : '!'}|${semanticText === text}`;
+    stickyText = text;
+    if (key === stickyKey && !sticky.hidden) return;
+    stickyKey = key;
+    const colors = lexState && lexParsedText === text ? lexState.ranges : null;
+    sticky.replaceChildren(...lines.map((line) => {
+      const a = lineStarts[line], b = line + 1 < lineStarts.length ? lineStarts[line + 1] - 1 : text.length;
+      const row = el('div', 'code-sticky-row');
+      row.style.height = `${g.lh}px`;
+      const nr = el('span', 'code-sticky-nr', String(line + 1));
+      nr.style.width = `${metrics.gutter}px`;
+      const codeEl = el('code', `hljs language-${lang.hl}`);
+      const lineColors = colors && a >= lexState.from && b <= lexState.to ? colors : syntaxRanges(parser, text, tree, a, b);
+      codeEl.innerHTML = highlightRanges(text, lineColors, semantic, a, b) || ' ';
+      codeEl.style.paddingLeft = `${g.left}px`;
+      codeEl.style.transform = `translateX(${-metrics.left}px)`;
+      const body = el('div', 'code-sticky-text');
+      body.append(codeEl);
+      row.append(nr, body);
+      row.addEventListener('click', () => { scrollTo(g.top + line * g.lh); ta.focus({ preventScroll: true }); });
+      return row;
+    }));
+    sticky.style.top = `${scroller.offsetTop}px`;
+    sticky.hidden = false;
+  }
+  // the wheel over the held lines scrolls the text under them
+  sticky.addEventListener('wheel', (e) => { e.preventDefault(); scrollTo(metrics.top + e.deltaY, metrics.left + e.deltaX); }, { passive: false });
+
   // --- a find's matches, set by the host, redrawn with the text ---
   let findRanges = [];
   let findAt = -1;
@@ -884,9 +1077,23 @@ function codeEditor(view, file, btn, id, opts = {}) {
     if (!findRanges.length) { if (findsWin.firstChild) findsWin.textContent = ''; return; }
     const text = ta.value;
     if (text !== hlText) { redraw(); return; }
-    const marks = findRanges.filter(([a, b]) => b <= text.length).map(([from, to], i) => ({ from, to, wrap: (raw) => `<mark${i === findAt ? ' class="now"' : ''}>${esc(raw)}</mark>` }));
+    // only the window's matches made into marks: a find with thousands of matches costs a
+    // keystroke no more than one with a few
+    const marks = [];
+    for (let i = windowStart(findRanges, (r) => r[0], (r) => r[1]); i < findRanges.length && findRanges[i][0] <= drawn.to; i++) {
+      const [from, to] = findRanges[i];
+      if (to <= text.length) marks.push({ from, to, wrap: (raw) => `<mark${i === findAt ? ' class="now"' : ''}>${esc(raw)}</mark>` });
+    }
     findsWin.innerHTML = markedHtml(text, marks, drawn);
     placeWindow(findsWin, drawn);
+  }
+  // the first of a list sorted by start that may reach into the drawn window: the first
+  // starting at or after it, or the one before when that one runs into it
+  function windowStart(list, startOf, endOf) {
+    let lo = 0, hi = list.length;
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (startOf(list[mid]) < drawn.from) lo = mid + 1; else hi = mid; }
+    while (lo > 0 && endOf(list[lo - 1]) >= drawn.from) lo--;
+    return lo;
   }
 
   // --- an agent's edits, typed in a little at a time where the user sees them ---
@@ -1036,17 +1243,19 @@ function codeEditor(view, file, btn, id, opts = {}) {
       awayWas = !!away;
     },
     // the offset under the mouse, as the hover finds it
-    offsetAt: (event) => {
-      const rect = ta.getBoundingClientRect(), g = geom(), text = ta.value;
-      lineAt(text, 0);
-      const line = Math.max(0, Math.min(lineStarts.length - 1, Math.floor((event.clientY - rect.top - g.top) / g.lh)));
-      const column = Math.max(0, Math.round((event.clientX - rect.left - g.left) / g.cw));
-      const start = lineStarts[line], end = line + 1 < lineStarts.length ? lineStarts[line + 1] - 1 : text.length;
-      return start + (offsetAtColumn(text.slice(start, end), 0, column, g.tab) ?? end - start);
-    },
+    offsetAt: (event) => offsetAtEvent(event),
     moved: () => { caretInView(); sendCursor(); tell(); },
   });
   let awayWas = false;
+  // the offset under a mouse event: its line, and the column nearest the mouse on it
+  function offsetAtEvent(event) {
+    const rect = ta.getBoundingClientRect(), g = geom(), text = ta.value;
+    lineAt(text, 0);
+    const line = Math.max(0, Math.min(lineStarts.length - 1, Math.floor((event.clientY - rect.top - g.top) / g.lh)));
+    const column = Math.max(0, Math.round((event.clientX - rect.left - g.left) / g.cw));
+    const start = lineStarts[line], end = line + 1 < lineStarts.length ? lineStarts[line + 1] - 1 : text.length;
+    return start + (offsetAtColumn(text.slice(start, end), 0, column, g.tab) ?? end - start);
+  }
   // the textarea's lines drawn from its window's first line down
   let taWindowAt = -1;
   function placeWindowTa() {
@@ -1070,7 +1279,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     return {
       ready, dirty: dirty(), readOnly: ta.readOnly, state: stateEl.textContent, bad: stateEl.classList.contains('bad'),
       lang: lang.hl, line: lineAt(text, e), col: e - text.lastIndexOf('\n', e - 1), sel: ta.selectionEnd - s,
-      indent: u === '\t' ? 'tab' : u.length, eol: eolMode, length: text.length,
+      indent: u === '\t' ? 'tab' : u.length, eol: eolMode, length: text.length, cursors: cursors.length,
       errors: errs.map((x) => ({ from: x.from, to: x.to, what: x.what, source: x.source, code: x.code, severity: diagnosticSeverity(x), line: lineAt(text, x.from), col: x.from - text.lastIndexOf('\n', x.from - 1) })),
       people: people.filter((p) => (me ? p.id !== me : p.name !== name)),
     };
@@ -1123,6 +1332,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
     viewBtn.title = rendered ? 'back to the markdown source' : 'show it rendered, a block edited where it is clicked';
     if (isMd) try { localStorage.setItem(MD_KEY, rendered ? '' : '1'); } catch {}
     if (rendered) paintMd(); else if (mdEditing) mdEditing.box.blur();
+    minimapSoon(); stickySoon();
   }
   let mdSeq = 0;
   async function paintMd() {
@@ -1257,8 +1467,12 @@ function codeEditor(view, file, btn, id, opts = {}) {
     const text = ta.value;
     if (!errs.length || errsText !== text) { if (squigWin.firstChild) squigWin.replaceChildren(); return; }
     if (text !== hlText) { redraw(); return; }
-    const marks = errs.map((e) => ({ from: e.from, to: Math.max(e.to, Math.min(e.from + 1, text.length)),
-      wrap: (raw) => `<mark class="${e.severity === 2 ? 'code-warning' : e.severity > 2 ? 'code-hint' : ''}">${esc(raw.replace(/\n/g, ' \n')) || ' '}</mark>` }));
+    const marks = [];
+    for (let i = windowStart(errs, (e) => e.from, (e) => e.to); i < errs.length && errs[i].from <= drawn.to; i++) {
+      const e = errs[i];
+      marks.push({ from: e.from, to: Math.max(e.to, Math.min(e.from + 1, text.length)),
+        wrap: (raw) => `<mark class="${e.severity === 2 ? 'code-warning' : e.severity > 2 ? 'code-hint' : ''}">${esc(raw.replace(/\n/g, ' \n')) || ' '}</mark>` });
+    }
     squigWin.innerHTML = markedHtml(text, marks, drawn);
     placeWindow(squigWin, drawn);
   }
@@ -1321,12 +1535,13 @@ function codeEditor(view, file, btn, id, opts = {}) {
       const line = lineAt(text, at) - 1;
       want.push({ kind: 'person', line, col: columnOf(text, lineStarts[line], at), p, tint: p.color || colorFor(p.name) });
     }
-    const key = `${lh}|${padTop}|${cw}|${padY}|${padX}|` + want.map((m) => m.kind === 'person' ? `p${m.line}:${m.col}:${m.p.name}:${m.tint}:${!!m.p.agent}` : `${m.kind}${m.line}:${m.severity ?? ''}:${m.title ?? ''}`).join('|');
+    const key = `${lh}|${padTop}|${cw}|${padY}|${padX}|${drawn.first}|${drawn.last}|` + want.filter((m) => m.line >= drawn.first && m.line < drawn.last).map((m) => m.kind === 'person' ? `p${m.line}:${m.col}:${m.p.name}:${m.tint}:${!!m.p.agent}` : `${m.kind}${m.line}:${m.severity ?? ''}:${m.title ?? ''}`).join('|');
     if (key === marksKey) return;
     marksKey = key;
     for (const m of gutter.querySelectorAll('.code-mark')) m.remove();
     for (const c of body.querySelectorAll('.code-caret')) c.remove();
     for (const m of want) {
+      if (m.line < drawn.first || m.line >= drawn.last) continue;
       if (m.kind === 'bookmark') {
         const mark = Object.assign(el('div', 'code-mark code-mark-bookmark'), { title: `Bookmark: line ${m.line + 1}` });
         mark.style.top = `${padTop + m.line * lh}px`;
@@ -1373,11 +1588,15 @@ function codeEditor(view, file, btn, id, opts = {}) {
     }));
     whoEl.hidden = !others.length;
     tell();
+    minimapSoon(); stickySoon();
   }
 
   // the caret kept in view as it moves, the scroller being the editor, not the box
   // center: a jump from afar put mid-view, as a find or a go to line wants
   function caretInView(center = false) {
+    // the text not drawn yet (a jump into a file just opened): the layers aren't as tall as
+    // the text, so a scroll now would be cut short; done in the frame that draws it
+    if (hlText !== ta.value) { wantCaret = true; wantCenter ||= center; redraw(); return; }
     // the line from the kept index and the column as drawn: the measured line height, so a
     // caret far down a long file is scrolled to where its line is drawn
     const text = ta.value, end = headOf(selNow());
@@ -1386,11 +1605,14 @@ function codeEditor(view, file, btn, id, opts = {}) {
     const col = columnOf(text, lineStarts[line], end);
     const y = padY + line * lh;
     const x = metrics.gutter + padX + col * cw;
-    const { top, left, height, width, gutter: gw } = metrics;
-    const out = y < top || y + lh > top + height;
+    const { top, left, width, gutter: gw } = metrics;
+    const height = metrics.height || scroller.clientHeight;
+    // lines kept between the caret and the view's edges (editor.cursorSurroundingLines)
+    const keep = Math.min(Math.max(0, Math.floor(height / lh / 2) - 1), (opts.display?.() || {}).cursorSurroundingLines || 0) * lh;
+    const out = y < top + keep || y + lh > top + height - keep;
     if (center && out) scrollTo(y - height / 2);
-    else if (y < top) scrollTo(y);
-    else if (y + lh > top + height) scrollTo(y + lh - height + 4);
+    else if (y < top + keep) scrollTo(y - keep);
+    else if (y + lh > top + height - keep) scrollTo(y + lh - height + 4 + keep);
     if (x < left + gw) scrollTo(metrics.top, x - gw - cw * 4);
     else if (x > left + width - cw * 2) scrollTo(metrics.top, x - width + cw * 4);
   }
@@ -1559,9 +1781,10 @@ function codeEditor(view, file, btn, id, opts = {}) {
     const native = text.length + (to - from) <= NATIVE_EDIT;
     // the range in the textarea's window, however long, for the browser's own edit of it
     if (native) { if (tw) tw.grab(from, to); else ta.setSelectionRange(from, to); }
+    replicaShift = 0;
     const ok = native && (text ? document.execCommand('insertText', false, text) : document.execCommand('delete'));
     if (!ok) { ta.setRangeText(text, from, to, 'end'); wantCaret = true; ta.dispatchEvent(new Event('input')); }
-    if (selFrom !== undefined) ta.setSelectionRange(selFrom, selTo ?? selFrom);
+    if (selFrom !== undefined) ta.setSelectionRange(selFrom + replicaShift, (selTo ?? selFrom) + replicaShift);
   }
   const lineStart = (p) => ta.value.lastIndexOf('\n', p - 1) + 1;
   const lineEnd = (p) => { const e = ta.value.indexOf('\n', p); return e < 0 ? ta.value.length : e; };
@@ -1701,8 +1924,18 @@ function codeEditor(view, file, btn, id, opts = {}) {
       historyStep(e.key.toLowerCase() === 'y' || e.shiftKey);
       return;
     }
+    if (e.key === 'Escape' && cursors.length) { e.preventDefault(); e.stopPropagation(); clearCursors(); return; }
     // the ide's escape its own: a find closed, the focus kept
     if (e.key === 'Escape' && !bare) { e.preventDefault(); ta.blur(); return; }
+    // the other cursors moved as the primary is about to be (multi-cursor.js)
+    if (cursors.length && !e.isComposing) {
+      const word = IS_MAC ? e.altKey : e.ctrlKey, lineKey = IS_MAC && e.metaKey;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { const right = e.key === 'ArrowRight'; setCursors(moveCursors(v, cursors, lineKey ? (right ? 'end' : 'lineStart') : word ? (right ? 'wordRight' : 'wordLeft') : right ? 'right' : 'left', e.shiftKey), v); }
+      else if (e.key === 'End' && !mod) setCursors(moveCursors(v, cursors, 'end', e.shiftKey), v);
+      else if (e.key === 'Home' && !mod) setCursors(moveCursors(v, cursors, 'home', e.shiftKey), v);
+      else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !mod && !e.altKey) setCursors(moveCursorsVertically(v, cursors, e.key === 'ArrowDown' ? 1 : -1, e.shiftKey, geom().tab), v);
+      else if (e.key === 'PageDown' || e.key === 'PageUp' || (mod && e.key.toLowerCase() === 'a')) clearCursors();
+    }
     if (mod && e.key === '/') { e.preventDefault(); toggleComment(); return; }
     if (e.key === 'Home' && !mod && !e.altKey) { e.preventDefault(); smartHome(e.shiftKey); return; }
     if ((e.key === 'PageDown' || e.key === 'PageUp') && !mod && !e.altKey) { e.preventDefault(); verticalMove(e.key === 'PageDown' ? 1 : -1, e.shiftKey, true); return; }
@@ -1737,7 +1970,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
       } else typeIn(from, t, `\n${ind}${opens ? u : ''}`);
       return;
     }
-    if (e.key === 'Backspace' && s === t && s > 0) {
+    if (e.key === 'Backspace' && s === t && s > 0 && !cursors.length) {
       if (PAIRS[v[s - 1]] && PAIRS[v[s - 1]] === v[s]) { e.preventDefault(); typeIn(s - 1, s + 1, ''); return; }
       const ls = lineStart(s);
       const u = unit();
@@ -1749,6 +1982,8 @@ function codeEditor(view, file, btn, id, opts = {}) {
       return;
     }
     if (e.key.length !== 1) return;
+    // with several cursors a key types plainly at each, the pair tricks being a lone caret's
+    if (cursors.length) return;
     // a closer already there stepped over
     if ((CLOSERS.has(e.key) || `"'\``.includes(e.key)) && s === t && v[s] === e.key) {
       e.preventDefault();
@@ -1770,6 +2005,84 @@ function codeEditor(view, file, btn, id, opts = {}) {
     }
   });
 
+  // --- several cursors at once (multi-cursor.js): the textarea's selection the primary, the
+  // others kept here and drawn under the text, each edit typed made again at every one ---
+  let cursors = [], cursorsText = null, cursorsWhole = false, replicaShift = 0;
+  const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || '');
+  function setCursors(list, text) { cursors = list.length ? normalizeCursors(list) : []; cursorsText = cursors.length ? text : null; }
+  function clearCursors() { if (!cursors.length) return; setCursors([], null); cursorsWhole = false; paintDeco(); tell(); }
+  // the browser's edit at the primary (historyText → ta.value) made at the others too
+  function replicate() {
+    const before = historyText, after = ta.value;
+    const r = replicateEdit(before, after, beforeSelection, ta.selectionStart, cursorsText === before ? cursors : []);
+    if (!r) { setCursors([], null); return; }
+    const ops = opEdits(after, r.edits);
+    const next = opApply(after, ops);
+    const was = ta.selectionStart;
+    ta.value = next;
+    ta.setSelectionRange(r.primary[0], r.primary[1]);
+    replicaShift = r.primary[0] - was;
+    setCursors(r.cursors, next);
+  }
+  // the primary made one of the others, a new selection taking its place
+  function takePrimary(select) {
+    const [s, e] = [ta.selectionStart, ta.selectionEnd];
+    setCursors([...(cursorsText === ta.value ? cursors : []), { anchor: s, head: e }], ta.value);
+    ta.setSelectionRange(select[0], select[1]);
+    ta.focus({ preventScroll: true });
+    caretInView(); sendCursor(); tell(); paintDeco();
+  }
+  // Ctrl+D: the word at the caret, then the next match of the selection as another cursor
+  function addNextMatch() {
+    if (ta.readOnly && !ready) return false;
+    const text = ta.value;
+    const m = nextMatch(text, [ta.selectionStart, ta.selectionEnd], cursorsText === text ? cursors : [], cursorsWhole);
+    if (!m) return false;
+    if (ta.selectionStart === ta.selectionEnd) { cursorsWhole = m.whole; ta.setSelectionRange(...m.select); sendCursor(); tell(); return true; }
+    cursorsWhole = m.whole;
+    takePrimary(m.select);
+    return true;
+  }
+  // Ctrl+Shift+L: a cursor on every match
+  function selectAllMatches() {
+    const text = ta.value;
+    const all = allMatches(text, [ta.selectionStart, ta.selectionEnd], cursorsWhole);
+    if (all.length < 2) return false;
+    const primary = all.pop();
+    setCursors(all, text);
+    ta.setSelectionRange(primary.anchor, primary.head);
+    ta.focus({ preventScroll: true });
+    sendCursor(); tell(); paintDeco();
+    return true;
+  }
+  // Ctrl+Alt+Up and Down: a cursor on the line beside the primary, at its column
+  function addCursorLine(d) {
+    const next = cursorBeside(ta.value, ta.selectionEnd, d, geom().tab);
+    if (!next) return false;
+    takePrimary([next.anchor, next.head]);
+    return true;
+  }
+  // Shift+Alt+I: a cursor at the end of each selected line
+  function addCursorsAtLineEnds() {
+    const [s, e] = [ta.selectionStart, ta.selectionEnd];
+    const ends = cursorsAtLineEnds(ta.value, s, e);
+    if (!ends.length) return false;
+    const primary = ends.pop();
+    setCursors(ends, ta.value);
+    ta.setSelectionRange(primary.anchor, primary.head);
+    sendCursor(); tell(); paintDeco();
+    return true;
+  }
+  // Alt+click adds a cursor where the mouse is; any other press is one caret again
+  ta.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (!e.altKey || ta.readOnly) { if (!e.shiftKey) clearCursors(); return; }
+    e.preventDefault();
+    const at = offsetAtEvent(e);
+    if (at === null) return;
+    ta.focus({ preventScroll: true });
+    takePrimary([at, at]);
+  });
   let cursorTimer = 0;
   const sendCursor = () => {
     clearTimeout(cursorTimer);
@@ -1781,6 +2094,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
   });
   ta.addEventListener('input', (e) => {
     const group = historyGroup || (/^(insertText|deleteContentBackward|deleteContentForward)$/.test(e.inputType) ? e.inputType : '');
+    if (cursors.length) replicate();
     history.record(historyText, ta.value, beforeSelection, [ta.selectionStart, ta.selectionEnd], group);
     historyText = ta.value;
     beforeSelection = [ta.selectionStart, ta.selectionEnd];
@@ -1866,7 +2180,10 @@ function codeEditor(view, file, btn, id, opts = {}) {
     focus: () => ta.focus({ preventScroll: true }),
     // shown again (its tab's), or restyled (a setting): only a restyle reads the geometry again,
     // a read of computed style forcing the whole page's style to be worked out mid-switch
-    show: (restyle = false) => { if (restyle || !geomCache) regeom(); overviewColors = null; rulersKey = ''; guideSnapshot = null; redraw(true); },
+    show: (restyle = false) => { if (restyle || !geomCache) regeom(); overviewColors = null; minimapColors = new Map(); minimapRows = null; stickyKey = ''; rulersKey = ''; guideSnapshot = null; redraw(true); },
+    // several cursors (multi-cursor.js)
+    addNextMatch, selectAllMatches, addCursorLine, addCursorsAtLineEnds, clearCursors,
+    cursorCount: () => cursors.length,
     text: () => ta.value,
     // a converted extension enabled or disabled: its grammar taken up or let go, the colors
     // worked out again; a language the page parses never changes
@@ -1893,6 +2210,10 @@ function codeEditor(view, file, btn, id, opts = {}) {
       const next = opApply(before, ops);
       const sel = selection || [opMap(ops, ta.selectionStart), opMap(ops, ta.selectionEnd)];
       history.recordOperation(before, ops, [ta.selectionStart, ta.selectionEnd], sel);
+      // the edits' own places for the parse: a format's many small edits reuse the tree
+      // between them rather than parsing the file again from the first to the last
+      syntax.noteEdits(before, next, ops);
+      setCursors([], null);
       ta.value = next; historyText = ta.value; beforeSelection = sel;
       ta.setSelectionRange(...sel);
       redraw(); flush(); paintState(); caretInView(); sendCursor();
@@ -1980,7 +2301,7 @@ function codeEditor(view, file, btn, id, opts = {}) {
       hlAbort?.abort();
       for (const timer of [bigTimer, hlTimer, mdTimer, checkTimer, cursorTimer, agentFade, armed, occurrenceTimer, hoverTimer, restTimer]) clearTimeout(timer);
       hoverAbort?.abort();
-      for (const frame of [drawFrame, tellFrame, viewFrame, decoFrame, overviewFrame]) cancelAnimationFrame(frame);
+      for (const frame of [drawFrame, tellFrame, viewFrame, decoFrame, overviewFrame, minimapFrame, stickyFrame]) cancelAnimationFrame(frame);
       syntax.clear();
       if (sock) sock.close();
       if (codeTabs.get(codeKey(file)) === id) codeTabs.delete(codeKey(file));

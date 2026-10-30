@@ -21,6 +21,16 @@ setting names:
 | Find in Selection, Preserve Case, search history | `Alt+L`, `Alt+P`, `↑`/`↓` in the find box | |
 | Convert indentation; change the file's line ending | status bar | |
 | Format, trim trailing whitespace and settle final newlines on save | | `editor.formatOnSave`, `files.trimTrailingWhitespace`, `files.insertFinalNewline`, `files.trimFinalNewlines` |
+| Several cursors: the word at the caret and its next match, every match, a cursor above or below, one at each selected line's end, one where Alt+Click lands; Escape leaves one | `Ctrl+D`, `Ctrl+Shift+L`, `Ctrl+Alt+↑` / `Ctrl+Alt+↓`, `Shift+Alt+I`, `Alt+Click` | |
+| Minimap beside the text, clicked or dragged to scroll | | `editor.minimap.enabled` |
+| Sticky scroll: the lines opening the scopes the view is in held at the top | | `editor.stickyScroll.enabled` |
+| Bracket pairs colored by nesting, a stray closer red | | `editor.bracketPairColorization.enabled` |
+| Line numbers absolute, relative to the caret, every tenth, or off | | `editor.lineNumbers` |
+| Colors in stylesheets and HTML underlined in their color | | `editor.colorDecorators` |
+| Lines kept between the caret and the view's edges | | `editor.cursorSurroundingLines` |
+| Font family and ligatures | | `editor.fontFamily`, `editor.fontLigatures` |
+| Auto Save after a delay, when the editor loses focus, or when the window does | | `files.autoSave`, `files.autoSaveDelay` |
+| Zen mode: the text alone | `Ctrl+K Z` | |
 
 Typing also follows VS Code. Home moves between the first non-blank character and the line
 start. A closing bracket typed on a blank line outdents to its opener. Enter after `/**`
@@ -28,6 +38,14 @@ opens a doc comment, and Enter on a ` * ` line continues it. Enter on a line hol
 indentation leaves that line empty. Hover, parameter hints and code actions need a
 language server installed for the file (Extensions); everything else works in every file,
 offline.
+
+With several cursors, what is typed, deleted or pasted at one happens at every one, in a
+single undo step; the arrow, Home and End keys move them all. Sticky scroll and bracket
+colors come from the page's own parsers, so they work offline in the languages the page
+parses (JavaScript, TypeScript, Python, Rust, C, C++, Java, Go, PHP, CSS, HTML, XML, JSON,
+YAML); a converted extension's grammar colors brackets from its tokens. Format Document
+applies a language server's edits where they are, so the caret, the scroll and the others'
+carets stay put and only the formatted lines are parsed again.
 
 Indentation guides are enabled by default. Toggle them from **View → Indentation
 Guides**, or set `editor.guides.indentation` in Settings. **View → Whitespace
