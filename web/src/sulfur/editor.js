@@ -33,7 +33,7 @@ import { mountHoverIntent } from './hover-intent.js';
 import { nextMatch, allMatches, replicateEdit, moveCursors, moveCursorsVertically, cursorBeside, cursorsAtLineEnds, normalizeCursors, rebaseCursors } from './multi-cursor.js';
 import { bracketRanges, bracketStateIndex, skipSpansFromTree, skipSpansFromRanges, mergeRanges } from './bracket-colors.js';
 import { stickyLines, STICKY_MAX } from './sticky-scroll.js';
-import { minimapLayout, minimapRuns, minimapScrollFor } from './minimap.js';
+import { minimapLayout, minimapRuns, minimapScrollFor, minimapRebaseRows } from './minimap.js';
 import { lineNumberLabels } from './line-numbers.js';
 import { colorLiterals, COLOR_LANGS } from './color-decorators.js';
 import { linkedTagRange } from './linked-editing.js';
@@ -970,6 +970,10 @@ function codeEditor(view, file, btn, id, opts = {}) {
     }
     return lexical;
   }
+  function minimapRebase(cache, text, tabSize) {
+    lineAt(text, 0);
+    return minimapRebaseRows(cache, text, lineStarts, changeOf(cache.text, text), (a, b) => minimapRuns(text, lineStarts, a, b, colorsFor(text, a, b), MINIMAP_W, tabSize));
+  }
   function paintMinimap() {
     minimapFrame = 0;
     const display = opts.display?.() || {};
@@ -988,6 +992,9 @@ function codeEditor(view, file, btn, id, opts = {}) {
     minimapLast = layout;
     // the runs kept for a band around the lines shown, made again only when the view leaves it
     const want = { first: layout.first, last: layout.first + layout.count };
+    // a keystroke moves the kept rows onto the new text, the edited lines alone made again:
+    // the band's hundreds of lines aren't colored and walked afresh for every key
+    if (minimapRows && minimapRows.text !== text && minimapRows.epoch === fontEpoch) minimapRows = minimapRebase(minimapRows, text, g.tab);
     if (!minimapRows || minimapRows.text !== text || want.first < minimapRows.first || want.last > minimapRows.last || minimapRows.epoch !== fontEpoch) {
       const first = Math.max(0, want.first - layout.count), last = Math.min(lineStarts.length, want.last + layout.count);
       minimapRows = { text, first, last, epoch: fontEpoch, rows: minimapRuns(text, lineStarts, first, last, colorsFor(text, first, last), MINIMAP_W, g.tab) };

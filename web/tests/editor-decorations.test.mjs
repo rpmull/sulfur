@@ -240,3 +240,28 @@ test('the lines changed since a commit are found as hunks, cheaply in a long fil
   assert.deepEqual(lineChanges(base, text), [{ from: 5000, count: 1, kind: 'modified' }, { from: 10000, count: 1, kind: 'added' }, { from: 15001, count: 0, kind: 'deleted' }]);
   assert.equal(lineChanges(base, base.split('\n').reverse().join('\n')), null);
 });
+
+test('cached minimap rows moved onto an edited text equal rows made afresh', async () => {
+  const { minimapRuns, minimapRebaseRows } = await import('../src/sulfur/minimap.js');
+  const { commonEnds } = await import('../src/text-operations.js');
+  const base = Array.from({ length: 300 }, (_, i) => `line ${i} = ${i % 7 ? 'value' : 'other thing'};`).join('\n') + '\n';
+  const make = (text, first, last) => ({ text, first, last, epoch: 0, rows: minimapRuns(text, starts(text), first, last) });
+  const edits = [
+    (t) => t.replace('line 100 =', 'line 100 = x +'),
+    (t) => t.replace('line 120 =', 'line 120\nsplit ='),
+    (t) => t.replace('line 150 = value;\n', ''),
+    (t) => t.replace('line 60 =', 'a\nb\nc\nline 60 ='),
+    (t) => t.replace('line 249 = value;', 'line 249 = value; // end of band'),
+  ];
+  for (const edit of edits) {
+    const cache = make(base, 50, 250);
+    const text = edit(base);
+    const ls = starts(text);
+    const moved = minimapRebaseRows(cache, text, ls, commonEnds(base, text), (a, b) => minimapRuns(text, ls, a, b));
+    assert.ok(moved);
+    const fresh = minimapRuns(text, ls, moved.first, moved.last);
+    assert.deepEqual(moved.rows, fresh);
+  }
+  // an edit outside the band: made afresh instead
+  assert.equal(minimapRebaseRows(make(base, 50, 250), base.replace('line 10 =', 'line 10 = y'), starts(base), commonEnds(base, base.replace('line 10 =', 'line 10 = y')), () => []), null);
+});
