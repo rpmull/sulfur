@@ -5,8 +5,8 @@ import { inlineSuffix, preferLanguageCompletion } from './inline-completion.js';
 import { semanticRanges } from './semantic-tokens.js';
 import { documentSymbols } from './navigation.js';
 
-const titles = ['TypeScript', 'Python', 'JavaScript', 'Java', 'C#', 'PHP', 'Shell (Bash)', 'C / C++', 'HCL / Terraform', 'Go'];
-const ids = ['typescript', 'python', 'javascript', 'java', 'csharp', 'php', 'shell', 'cpp', 'hcl', 'go'];
+const titles = ['TypeScript', 'Python', 'JavaScript', 'Java', 'C#', 'PHP', 'Shell (Bash)', 'C / C++', 'HCL / Terraform', 'Go', 'Bismuth'];
+const ids = ['typescript', 'python', 'javascript', 'java', 'csharp', 'php', 'shell', 'cpp', 'hcl', 'go', 'bismuth'];
 const aborted = (e) => e?.name === 'AbortError';
 // settings over defaults, objects merged key by key
 const mergeSettings = (under, over) => {
