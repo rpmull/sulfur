@@ -224,7 +224,7 @@ function themedIcon(def, theme) {
 // the editor's language names as VS Code says them in its status bar
 const LANG_NAMES = {
   javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python', bash: 'Shell Script', c: 'C', cpp: 'C++', go: 'Go',
-  rust: 'Rust', java: 'Java', ruby: 'Ruby', lua: 'Lua', csharp: 'C#', kotlin: 'Kotlin', swift: 'Swift', php: 'PHP', r: 'R',
+  rust: 'Rust', bismuth: 'Bismuth', java: 'Java', ruby: 'Ruby', lua: 'Lua', csharp: 'C#', kotlin: 'Kotlin', swift: 'Swift', php: 'PHP', r: 'R',
   scala: 'Scala', dart: 'Dart', elixir: 'Elixir', haskell: 'Haskell', julia: 'Julia', nix: 'Nix', powershell: 'PowerShell',
   sql: 'SQL', protobuf: 'Protocol Buffers', css: 'CSS', scss: 'SCSS', xml: 'HTML', json: 'JSON', yaml: 'YAML', ini: 'Ini',
   markdown: 'Markdown', latex: 'LaTeX', cmake: 'CMake', dockerfile: 'Dockerfile', makefile: 'Makefile', plaintext: 'Plain Text',
@@ -506,7 +506,7 @@ const SETTINGS = {
   'editor.inlineSuggest.model': { def: 'agent-sulfur-fast', type: 'model', title: 'Editor: Completion Machine / Model', about: 'Use the model the Agents app assigns to inline suggestions, or pin completion to a machine and its configured model. The machine must have that model ready; this does not change its model installation.' },
   'editor.inlineSuggest.delay': { def: 750, type: 'number', min: 200, max: 5000, title: 'Editor: AI Suggestion Delay', about: 'Idle time in milliseconds after meaningful typing before asking the completion model. Blank lines, Enter, indentation, and deletion do not request AI suggestions; Alt+\\ still works anywhere.' },
   'editor.diagnostics.delay': { def: 500, type: 'number', min: 300, max: 5000, title: 'Editor: Syntax Check Delay', about: 'Idle time in milliseconds before Sulfur\'s own syntax check marks half-typed code. A language server\'s problems show as soon as it reports them.' },
-  'sulfur.languageServerSettings': { def: {}, type: 'object', title: 'Languages: Server Settings', about: 'Language-server settings, keyed by extension id (typescript, python, javascript, java, csharp, php, shell, cpp, hcl, go). Runtime prerequisites and installation are in Extensions.' },
+  'sulfur.languageServerSettings': { def: {}, type: 'object', title: 'Languages: Server Settings', about: 'Language-server settings, keyed by extension id (typescript, python, javascript, java, csharp, php, shell, cpp, hcl, go, bismuth). Runtime prerequisites and installation are in Extensions.' },
   'editor.fontSize': { def: 13, type: 'number', min: 8, max: 40, title: 'Editor: Font Size', about: 'Controls the font size in pixels.' },
   'editor.fontFamily': { def: '', type: 'string', title: 'Editor: Font Family', about: 'The font family of the text, as CSS names it ("JetBrains Mono", "Fira Code", monospace). Empty for the theme’s own monospace font.' },
   'editor.mouseWheelZoom': { def: false, type: 'boolean', title: 'Editor: Mouse Wheel Zoom', about: 'Zoom the editor’s font with the mouse wheel while holding Ctrl (Cmd on a Mac).' },
@@ -2697,7 +2697,7 @@ async function formatActive(whole = true) {
     // the server's edits as it sent them when the whitespace pass left its text alone: each
     // where it is, as VS Code applies them, rather than a diff of the whole file
     const edits = result?.value && text === served ? textEditRanges(before, result.value).filter((e) => before.slice(e.from, e.to) !== e.text).sort((x, y) => x.from - y.from) : formattingEdits(before, text);
-    if (!result && text === before && !['csharp', 'c', 'cpp', 'java', 'javascript', 'typescript', 'rust', 'css', 'scss', 'json'].includes(lang?.hl)) {
+    if (!result && text === before && !['csharp', 'c', 'cpp', 'java', 'javascript', 'typescript', 'rust', 'bismuth', 'css', 'scss', 'json'].includes(lang?.hl)) {
       notify('info', 'Install a formatting-capable language extension in Extensions for this file.'); return;
     }
     if (edits.length) {
@@ -5951,7 +5951,7 @@ async function runFile(rel, hostArg) {
 // a file's run on a Windows host: {f} the file, {o} an output path
 const WIN_RUNNERS = {
   py: 'python "{f}"', js: 'node "{f}"', mjs: 'node "{f}"', ts: 'npx --yes tsx "{f}"', ps1: 'powershell -NoProfile -ExecutionPolicy Bypass -File "{f}"',
-  bat: 'call "{f}"', cmd: 'call "{f}"', cs: 'dotnet run "{f}"', go: 'go run "{f}"', rs: 'rustc "{f}" -o "{o}" && "{o}"',
+  bat: 'call "{f}"', cmd: 'call "{f}"', cs: 'dotnet run "{f}"', go: 'go run "{f}"', bi: 'bic run "{f}"', rs: 'rustc "{f}" -o "{o}" && "{o}"',
   c: 'cl /nologo /W3 "{f}" /Fe:"{o}" && "{o}"', cpp: 'cl /nologo /W3 /EHsc /std:c++20 "{f}" /Fe:"{o}" && "{o}"',
 };
 
@@ -8789,6 +8789,13 @@ const TEMPLATES = [
       '.gitignore': '/target\n',
     }),
   },
+  {
+    id: 'bismuth', label: 'Bismuth', description: 'main.bi: bic build and run', ic: 'main.bi', main: 'main.bi',
+    files: (n) => ({
+      'main.bi': `fn main() -> {\n    print("hello from ${n.replace(/[\\"{}]/g, (c) => (c === '{' || c === '}' ? c + c : '\\' + c))}");\n}\n`,
+      '.gitignore': `${IGNORE}main\n`,
+    }),
+  },
 ];
 
 const projectNameWhy = (v) => {
@@ -11575,6 +11582,7 @@ const SINGLE_BUILDS = {
   cpp: [['g++', 'G++', 'g++ -g -Wall -std=c++20 "{f}" -o "{o}"'], ['clang++', 'Clang++', 'clang++ -g -Wall -std=c++20 "{f}" -o "{o}"'], ['msvc', 'MSVC', 'cl /nologo /W3 /Zi /EHsc /std:c++20 "{f}" /Fe:"{o}"']],
   rs: [['rustc', 'Rust', 'rustc -g "{f}" -o "{o}"']],
   go: [['go', 'Go', 'go build -o "{o}" "{f}"']],
+  bi: [['bic', 'Bismuth', 'bic build -o "{o}" "{f}"']],
   zig: [['zig', 'Zig', 'zig build-exe "{f}" -femit-bin="{o}"']],
   cs: [['dotnet', '.NET', 'dotnet build "{f}" --artifacts-path .']],
   java: [['javac', 'Java', 'javac -d . "{f}"']],

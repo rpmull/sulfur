@@ -13,7 +13,7 @@ for (const [extensions, label, title, hue] of [
   ['rb rake', 'RB', 'Ruby source', 'r'], ['php', 'PHP', 'PHP source', 'p'], ['lua', 'LUA', 'Lua source', 'b'],
   ['sh bash zsh fish', 'SH', 'Shell script', 'g'], ['ps1 psm1 psd1', 'PS', 'PowerShell script', 'b'],
   ['bat cmd', 'CMD', 'Windows command script', 'g'], ['sql', 'SQL', 'SQL source', 'p'],
-  ['r rmd', 'R', 'R source', 'b'], ['dart', 'DT', 'Dart source', 'c'], ['zig', 'Z', 'Zig source', 'y'],
+  ['r rmd', 'R', 'R source', 'b'], ['dart', 'DT', 'Dart source', 'c'], ['zig', 'Z', 'Zig source', 'y'], ['bi', 'BI', 'Bismuth source', 'p'],
   ['ex exs', 'EX', 'Elixir source', 'p'], ['hs lhs', 'HS', 'Haskell source', 'p'], ['scala sc', 'SC', 'Scala source', 'r'],
   ['vue', 'V', 'Vue component', 'g'], ['svelte', 'S', 'Svelte component', 'o'],
   ['html htm xhtml', '<>', 'HTML document', 'o'], ['css', '#', 'CSS stylesheet', 'b'],

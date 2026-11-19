@@ -8,6 +8,9 @@ import { marked, Renderer, Lexer } from 'marked';
 // the common languages alone (highlight.js's own cut of ~40): a quarter of the whole, loaded
 // the first time a note, a hover or a chat shows code
 import hljs from 'highlight.js/lib/common';
+import bismuth from './hljs-bismuth.js';
+
+hljs.registerLanguage('bismuth', bismuth);
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&#34;', "'": '&#39;' })[c]);
 

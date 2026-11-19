@@ -16,6 +16,13 @@ const WORDS = {
     'hljs-type': 'bool byte char decimal double dynamic float int long object sbyte short string uint ulong ushort var',
     'hljs-literal': 'true false null',
   }),
+  // hljs-bismuth.js's words
+  bismuth: words({
+    'hljs-keyword': 'let var const fn struct enum impl type match if else for while loop in return break continue defer unsafe async await spawn import new comptime assert ref view priv packed distinct parallel reduce extern export from as link',
+    'hljs-type': 'void bool char str byte int uint float never i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 vec2 vec3 vec4 ivec2 ivec3 mat3 mat4 quat',
+    'hljs-literal': 'true false null',
+    'hljs-built_in': 'self sizeof offsetof alignof',
+  }),
 };
 
 const NUMBER = /0[xX][0-9a-fA-F_]+[uUlL]*|\d[\d_]*(\.\d[\d_]*)?([eE][+-]?\d+)?[fFdDmMuUlL]*/y;

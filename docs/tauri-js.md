@@ -57,7 +57,7 @@ directory's `Sulfur/sulfur.json`.
 | files | listing/link/empty metadata, bounded trees/search, BOM/CRLF, binary reads, chunk uploads |
 | collaborative edits | shared UTF-16 OT, rebasing, cursors, animated agent writes, autosave and disk conflicts |
 | execution | native PTYs, replay/reconnect, tasks, toolchains and Git |
-| languages | existing ten server installers and request protocol, IPC/stdin framing, virtual-document gate |
+| languages | existing eleven server installers and request protocol, IPC/stdin framing, virtual-document gate |
 | SQLite | explicit creation, readonly queries, transactional batches/triggers, authorizer, row/byte/preview limits and deadlines |
 | settings/profile | original keys, config location, `dev.phosphorus.sulfur` identifier and WebView data paths |
 | updates | existing minisign public key and `sulfur-<platform>-<arch>.json` feed names |

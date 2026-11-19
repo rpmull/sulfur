@@ -9,7 +9,7 @@ compilers. Runs as its own desktop app or in the browser, on a mesh or fully off
 
 - **Feels like VS Code**: palette, completion, extensions from Open VSX, themes
 - **Live collaboration** on every file
-- **Language servers** native support for ten languages
+- **Language servers** native support for eleven languages
 - **Builds, runs, git and SQLite** on any host machine
 - **Notes** in any folder: rendered markdown with `[[links]]`, math, diagrams and a graph view
 - **Self-updating** apps for macOS and Windows; a .deb for Linux

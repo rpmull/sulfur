@@ -2,7 +2,7 @@
 // again, brace languages' lines indented by their nesting, trailing spaces trimmed. Strings,
 // comments and the text inside lines are never changed, only the lines' leading whitespace.
 
-const BRACES = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hxx', 'cs', 'java', 'go', 'rs', 'php', 'css', 'scss', 'less', 'json', 'jsonc', 'kt', 'kts', 'swift', 'dart', 'scala', 'groovy', 'gradle', 'proto', 'zig', 'hcl', 'tf']);
+const BRACES = new Set(['js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hxx', 'cs', 'java', 'go', 'rs', 'php', 'css', 'scss', 'less', 'json', 'jsonc', 'kt', 'kts', 'swift', 'dart', 'scala', 'groovy', 'gradle', 'proto', 'zig', 'hcl', 'tf', 'bi']);
 const OPEN = { '{': 1, '[': 1, '(': 1 };
 const CLOSE = { '}': 1, ']': 1, ')': 1 };
 
