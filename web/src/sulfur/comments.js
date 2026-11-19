@@ -5,14 +5,14 @@
 // block comment delimiters by highlight language
 const BLOCK = {
   javascript: ['/*', '*/'], typescript: ['/*', '*/'], c: ['/*', '*/'], cpp: ['/*', '*/'], csharp: ['/*', '*/'],
-  java: ['/*', '*/'], go: ['/*', '*/'], rust: ['/*', '*/'], kotlin: ['/*', '*/'], swift: ['/*', '*/'], scala: ['/*', '*/'],
+  java: ['/*', '*/'], go: ['/*', '*/'], rust: ['/*', '*/'], bismuth: ['/*', '*/'], kotlin: ['/*', '*/'], swift: ['/*', '*/'], scala: ['/*', '*/'],
   dart: ['/*', '*/'], php: ['/*', '*/'], css: ['/*', '*/'], scss: ['/*', '*/'], sql: ['/*', '*/'], protobuf: ['/*', '*/'],
   xml: ['<!--', '-->'], html: ['<!--', '-->'], markdown: ['<!--', '-->'], lua: ['--[[', ']]'], haskell: ['{-', '-}'],
   python: ['"""', '"""'], ruby: ['=begin', '=end'], powershell: ['<#', '#>'], julia: ['#=', '=#'], r: null,
 };
 export const blockCommentFor = (hl) => BLOCK[hl] || null;
 // languages whose documentation comments run /** … */ with a * per line
-const DOC = new Set(['javascript', 'typescript', 'c', 'cpp', 'csharp', 'java', 'go', 'rust', 'kotlin', 'swift', 'scala', 'dart', 'php']);
+const DOC = new Set(['javascript', 'typescript', 'c', 'cpp', 'csharp', 'java', 'go', 'rust', 'bismuth', 'kotlin', 'swift', 'scala', 'dart', 'php']);
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 

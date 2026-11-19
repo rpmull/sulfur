@@ -10,7 +10,7 @@ export const LANGUAGE_EXTENSIONS = {
   js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
   py: 'python', pyi: 'python', java: 'java', cs: 'csharp', php: 'php',
   sh: 'shell', bash: 'shell', c: 'cpp', h: 'cpp', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp',
-  tf: 'hcl', tfvars: 'hcl', hcl: 'hcl', go: 'go',
+  tf: 'hcl', tfvars: 'hcl', hcl: 'hcl', go: 'go', bi: 'bismuth',
 };
 export function languageId(path, extension) {
   if (/\.tsx$/i.test(path)) return 'typescriptreact';

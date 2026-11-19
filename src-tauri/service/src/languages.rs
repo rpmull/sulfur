@@ -49,11 +49,12 @@ pub fn catalog() -> Vec<Value> {
         native("cpp", "C / C++", "clangd", "C/C++ toolchain and compile_commands.json"),
         native("hcl", "HCL / Terraform", "terraform-ls", "Terraform CLI recommended"),
         native("go", "Go", "gopls", "current Go SDK; installation compiles gopls"),
+        native("bismuth", "Bismuth", "bils", "bils or bic on PATH; otherwise Go 1.22+ to compile bils"),
     ]
 }
 
 fn valid_id(id: &str) -> bool {
-    const BUILT_IN: &[&str] = &["typescript", "javascript", "python", "java", "csharp", "php", "shell", "cpp", "hcl", "go"];
+    const BUILT_IN: &[&str] = &["typescript", "javascript", "python", "java", "csharp", "php", "shell", "cpp", "hcl", "go", "bismuth"];
     if BUILT_IN.contains(&id) {
         return true;
     }
@@ -435,6 +436,25 @@ impl LanguageHost {
             let gobin = stage.0.to_string_lossy().into_owned();
             run(vec!["go".into(), "install".into(), "golang.org/x/tools/gopls@latest".into()], vec![("GOBIN".into(), gobin)]).await?;
             m.insert("entry".into(), json!(format!("gopls{SUFFIX}")));
+        } else if id == "bismuth" {
+            // the toolchain's own server when it is installed: bils, or `bic lsp`
+            if let Some(existing) = which("bils") {
+                m.insert("entry".into(), json!(existing));
+                m.insert("external".into(), json!(true));
+            } else if let Some(bic) = which("bic") {
+                m.insert("entry".into(), json!(bic));
+                m.insert("args".into(), json!(["lsp"]));
+                m.insert("external".into(), json!(true));
+            } else {
+                // the module is served by its Forgejo host, outside the public Go proxy and checksum database
+                let gobin = stage.0.to_string_lossy().into_owned();
+                run(
+                    vec!["go".into(), "install".into(), "git.philab.io/ryan/bismuth/cmd/bils@latest".into()],
+                    vec![("GOBIN".into(), gobin), ("GOPRIVATE".into(), "git.philab.io".into())],
+                )
+                .await?;
+                m.insert("entry".into(), json!(format!("bils{SUFFIX}")));
+            }
         } else if id == "csharp" {
             let dir = stage.0.to_string_lossy().into_owned();
             run(vec!["dotnet".into(), "tool".into(), "install".into(), "csharp-ls".into(), "--tool-path".into(), dir], vec![]).await?;
@@ -617,6 +637,8 @@ impl LanguageHost {
                 }
             } else if id == "hcl" {
                 argv.push("serve".into());
+            } else if id == "bismuth" {
+                argv.extend(args_of(&m["args"]));
             }
         }
         let mut cmd = hidden(&argv[0]);
@@ -843,10 +865,11 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_has_ten_servers() {
+    fn the_catalog_has_eleven_servers() {
         let dir = tempfile::tempdir().unwrap();
         let host = LanguageHost { home: dir.path().join("languages") };
-        assert_eq!(host.status().len(), 10);
+        assert_eq!(host.status().len(), 11);
+        assert!(valid_id("bismuth"));
         assert!(valid_id("vsx.a.b-c"));
         assert!(!valid_id("vsx.../x"));
         assert!(!valid_id("rust"));

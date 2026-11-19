@@ -8,9 +8,12 @@ Installer and server logs appear in **Output → Languages: host**. Nothing is
 installed automatically. Installing an extension downloads and executes trusted
 third-party language tooling as your operating-system user.
 
-## Which ten?
+## Which languages?
 
-As of October 22, 2026, the catalog follows the latest complete GitHub Octoverse
+The catalog has the ten most active GitHub languages plus Bismuth, the
+language of [ryan/bismuth](https://git.philab.io/ryan/bismuth).
+
+As of October 22, 2026, the ten follow the latest complete GitHub Octoverse
 language ranking, [Octoverse 2025](https://github.blog/news-insights/octoverse/octoverse-a-new-developer-joins-github-every-second-as-ai-leads-typescript-to-1/).
 Its top-ten chart uses monthly contributors and lists TypeScript, Python,
 JavaScript, Java, C#, PHP, Shell, C++, HCL, and Go. This is a reasonable measure
@@ -46,6 +49,7 @@ sandboxed JavaScript extensions.
 | `cpp` | C, C++ | [clangd](https://clangd.llvm.org/installation) | C/C++ compiler/toolchain and compilation database. Uses `clangd` on PATH if present; otherwise downloads the official x86-64 Windows/Linux/macOS release. ARM hosts need native clangd on PATH (for example LLVM on Apple Silicon). |
 | `hcl` | HCL / Terraform | [terraform-ls](https://github.com/hashicorp/terraform-ls) | Official Windows/Linux/macOS amd64/arm64 binary; Terraform CLI and initialized provider schemas recommended. |
 | `go` | Go | [gopls](https://go.dev/gopls/) | Current Go SDK. The user's requested installation runs `go install golang.org/x/tools/gopls@latest` into the private directory. Sulfur development verification does not run this installer or build the application. |
+| `bismuth` | Bismuth (`.bi`) | [bils](https://git.philab.io/ryan/bismuth/src/branch/main/docs/tooling.md) | Uses `bils` on PATH, or `bic lsp` when only `bic` is installed (both come from the bismuth repository's `scripts/install.sh`). Otherwise the installation runs `go install git.philab.io/ryan/bismuth/cmd/bils@latest` into the private directory with `GOPRIVATE=git.philab.io`, which needs Go 1.22+ and access to git.philab.io. Diagnostics are the compiler's own (`bic check`); formatting is `bic fmt`. Highlighting, the `.bi` icon, **Build Active File** (`bic build`), **Run Active File** (`bic run`), the `bic` toolchain probe and the **Bismuth** new-project kind work without the extension. |
 
 Windows npm is invoked through Node and npm's JavaScript entry point, avoiding
 shell interpretation of home-directory names. POSIX SSH sessions include common

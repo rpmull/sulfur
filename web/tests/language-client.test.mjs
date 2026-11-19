@@ -73,8 +73,9 @@ test('rename edits use original positions and reject overlaps before changing te
   assert.throws(() => applyTextEdits('abc', [{ range: range(3, 1), newText: 'x' }]), /invalid/);
 });
 
-test('ten optional languages include shared C support and JSX/TSX identifiers', () => {
-  assert.equal(new Set(Object.values(LANGUAGE_EXTENSIONS)).size, 10);
+test('eleven optional languages include shared C support and JSX/TSX identifiers', () => {
+  assert.equal(new Set(Object.values(LANGUAGE_EXTENSIONS)).size, 11);
+  assert.equal(LANGUAGE_EXTENSIONS.bi, 'bismuth');
   assert.equal(LANGUAGE_EXTENSIONS.c, 'cpp');
   assert.equal(languageId('file.tsx', 'typescript'), 'typescriptreact');
   assert.equal(languageId('file.c', 'cpp'), 'c');

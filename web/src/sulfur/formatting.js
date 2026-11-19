@@ -1,6 +1,6 @@
 import { opApply, opEdits } from '../text-operations.js';
 
-const LANGUAGES = new Set(['csharp', 'c', 'cpp', 'java', 'javascript', 'typescript', 'rust', 'css', 'scss', 'json']);
+const LANGUAGES = new Set(['csharp', 'c', 'cpp', 'java', 'javascript', 'typescript', 'rust', 'bismuth', 'css', 'scss', 'json']);
 
 // This pass changes whitespace only. Language servers handle syntax-specific
 // formatting first; literal/comment contents are kept byte for byte here.

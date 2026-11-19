@@ -635,6 +635,7 @@ pub(crate) const KNOWN: &[(&str, &str, &str, &str)] = &[
     ("rustc", "Rust", "compiler", "--version"),
     ("cargo", "Cargo", "build", "--version"),
     ("go", "Go", "compiler", "version"),
+    ("bic", "Bismuth", "compiler", "version"),
     ("dotnet", ".NET", "sdk", "--version"),
     ("javac", "Java", "compiler", "-version"),
     ("mvn", "Maven", "build", "-v"),

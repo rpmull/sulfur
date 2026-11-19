@@ -93,7 +93,7 @@ For optional completion, semantic navigation, rename, and diagnostics, open
 **Extensions → Optional language extensions**. Select languages and a host, then
 **Install selected**. These use native language servers on that host, with
 enable/disable/uninstall controls. See [Language servers](sulfur-language-servers.md)
-for the ten-language selection, runtime prerequisites, and offline behavior.
+for the eleven-language selection, runtime prerequisites, and offline behavior.
 
 1. Run **Extensions: Create New Extension…** from the command palette (`Ctrl+Shift+P`). Name it, for example `word-count`.
 2. Sulfur writes `~/.sulfur/extensions/word-count/` into your home: a `package.json`, an `extension.js` and a `README.md`. It enables the extension and opens `extension.js`.
@@ -353,7 +353,7 @@ Otherwise it asks which to build with. **Run › Select Toolchain…** always as
 | `defaultTask` | The task Ctrl+B runs, by id: `build`, `rebuild`, `test`, … |
 | `tasks` | Your own tasks: `{label, command, group}`, the command run in the project's folder. `group` is `build`, `test`, `run` or `other`. |
 
-Each task runs in a terminal of its own in the Terminal panel. Errors and warnings from MSVC, MSBuild, dotnet, gcc, clang, Go, Rust and CMake land in the Problems panel, linked to their lines. Editing the file and saving it takes effect at once; **Run › Select Toolchain…** and **Add a Task** (under **Run › Run Task…** and in the Run and Build view) write it for you.
+Each task runs in a terminal of its own in the Terminal panel. Errors and warnings from MSVC, MSBuild, dotnet, gcc, clang, Go, Rust, Bismuth (`bic`) and CMake land in the Problems panel, linked to their lines. Editing the file and saving it takes effect at once; **Run › Select Toolchain…** and **Add a Task** (under **Run › Run Task…** and in the Run and Build view) write it for you.
 
 The green **Run** arrow and **F5** follow the active file's project and selected configuration. CMake projects use the [CMake File API](https://cmake.org/cmake/help/latest/manual/cmake-file-api.7.html) to map executable targets to their actual output paths, including `OUTPUT_NAME`, custom output directories and multi-configuration builds. Source files in libraries follow their dependencies to an application target. A remembered startup target or the application matching the project name takes precedence when several applications share a library; **Select Startup Item…** chooses another target. Switching from a standalone source file to a project file updates the Run view and arrow immediately. Run launches an already-built executable; **Ctrl+F5** retains the build-then-run workflow. An unbuilt executable prompts you to build with Ctrl+B. Older CMake trees without metadata acquire a Sulfur codemodel query on the next requested build or configure.
 
