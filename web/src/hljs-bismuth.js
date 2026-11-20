@@ -1,14 +1,16 @@
 // Bismuth (.bi, https://git.philab.io/ryan/bismuth) for highlight.js: nestable
 // block comments, interpolated "…{expr:spec}…" strings, raw r"…" strings,
-// attributes, and the language's keywords, primitive and math types.
+// attributes, and the language's keywords (virtual, super, is and as included),
+// primitive and math types.
 export default function bismuth(hljs) {
   const IDENT = '[A-Za-z_][A-Za-z0-9_]*';
   const KEYWORDS = {
     keyword: ['let', 'var', 'const', 'fn', 'struct', 'enum', 'impl', 'type', 'match', 'if', 'else', 'for', 'while', 'loop',
       'in', 'return', 'break', 'continue', 'defer', 'unsafe', 'async', 'await', 'spawn', 'import', 'new', 'comptime',
-      'assert', 'ref', 'view', 'priv', 'packed', 'distinct', 'parallel', 'reduce', 'extern', 'export', 'from', 'as', 'link'],
+      'assert', 'ref', 'view', 'priv', 'virtual', 'packed', 'distinct', 'parallel', 'reduce', 'extern', 'export', 'from',
+      'as', 'is', 'link'],
     literal: ['true', 'false', 'null'],
-    built_in: ['self', 'sizeof', 'offsetof', 'alignof', 'print', 'eprint'],
+    built_in: ['self', 'super', 'sizeof', 'offsetof', 'alignof', 'print', 'eprint'],
     type: ['void', 'bool', 'char', 'str', 'byte', 'int', 'uint', 'float', 'never', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16',
       'u32', 'u64', 'f32', 'f64', 'vec2', 'vec3', 'vec4', 'ivec2', 'ivec3', 'mat3', 'mat4', 'quat'],
   };

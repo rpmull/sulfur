@@ -18,10 +18,10 @@ const WORDS = {
   }),
   // hljs-bismuth.js's words
   bismuth: words({
-    'hljs-keyword': 'let var const fn struct enum impl type match if else for while loop in return break continue defer unsafe async await spawn import new comptime assert ref view priv packed distinct parallel reduce extern export from as link',
+    'hljs-keyword': 'let var const fn struct enum impl type match if else for while loop in return break continue defer unsafe async await spawn import new comptime assert ref view priv virtual packed distinct parallel reduce extern export from as is link',
     'hljs-type': 'void bool char str byte int uint float never i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 vec2 vec3 vec4 ivec2 ivec3 mat3 mat4 quat',
     'hljs-literal': 'true false null',
-    'hljs-built_in': 'self sizeof offsetof alignof',
+    'hljs-built_in': 'self super sizeof offsetof alignof',
   }),
 };
 
