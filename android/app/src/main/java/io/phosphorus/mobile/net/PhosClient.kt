@@ -113,7 +113,9 @@ class PhosClient(val base: HttpUrl, val session: SessionStore) {
             override fun onFailure(call: Call, e: IOException) {
                 cont.resumeWithException(PhosException(0, e.message ?: "can't reach ${req.url.host}"))
             }
-            override fun onResponse(call: Call, response: Response) = cont.resume(response)
+            override fun onResponse(call: Call, response: Response) {
+                cont.resume(response) { _, r, _ -> r.close() }
+            }
         })
     }
 

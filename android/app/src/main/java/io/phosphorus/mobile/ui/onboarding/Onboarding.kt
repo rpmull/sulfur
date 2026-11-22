@@ -71,6 +71,7 @@ import io.phosphorus.mobile.net.PhosException
 import io.phosphorus.mobile.ui.LocalGraph
 import io.phosphorus.mobile.ui.common.PrimaryButton
 import io.phosphorus.mobile.ui.theme.Phos
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /** The glowing mark at the top of the sign-in screens. */
@@ -130,6 +131,10 @@ fun ConnectScreen(initial: String?, onConnected: (ServerSession, Boolean, Boolea
                 onConnected(s, probe.signedIn, probe.setup)
             } catch (e: PhosException) {
                 error = if (e.status == 0) "Can't reach ${u.host}. Check the domain and your connection.\n${e.message}" else e.message
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = "${u.host} answered, but not as a Phosphorus desktop does."
             } finally {
                 busy = false
             }
@@ -207,6 +212,10 @@ fun LoginScreen(server: ServerSession, setup: Boolean, onSignedIn: () -> Unit, o
                 onSignedIn()
             } catch (e: PhosException) {
                 error = if (e.status == 0) "Can't reach ${server.base.host}" else e.message
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = "Unexpected answer from ${server.base.host}: ${e.message}"
             } finally {
                 busy = false
             }

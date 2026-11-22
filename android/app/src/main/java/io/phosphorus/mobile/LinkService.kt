@@ -19,6 +19,8 @@ class LinkService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Restarted on its own after the process died: there are no sockets to keep alive.
+        if (intent == null) { stopSelf(); return START_NOT_STICKY }
         val domain = intent?.getStringExtra(EXTRA_DOMAIN) ?: "your mesh"
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
@@ -33,7 +35,7 @@ class LinkService : Service() {
             .build()
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, 1, n, type)
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     companion object {

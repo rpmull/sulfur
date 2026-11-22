@@ -88,8 +88,8 @@ fun FilePreviewScreen(nav: NavController, host: String, share: String, path: Str
             }
             IconButton(onClick = { open(share = true) }) { Icon(Icons.Outlined.Share, "Share") }
             IconButton(onClick = {
-                Downloads.toDownloads(context, s.client, s.drive.fileUrl(at, inline = false), name)
-                scope.launch { snack.showSnackbar("Downloading to Downloads/Phosphorus") }
+                val ok = Downloads.toDownloads(context, s.client, s.drive.fileUrl(at, inline = false), name)
+                scope.launch { snack.showSnackbar(if (ok) "Downloading $name" else "Couldn't start the download") }
             }) { Icon(Icons.Outlined.Download, "Download") }
         },
     ) { pad ->

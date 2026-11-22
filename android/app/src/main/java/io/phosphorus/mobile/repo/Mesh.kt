@@ -132,8 +132,8 @@ class Mesh(private val client: PhosClient, private val scope: CoroutineScope) {
     fun start() {
         stateSocket.start()
         statsSocket.start()
-        scope.launch { stateSocket.frames.collect(::onStateFrame) }
-        scope.launch { statsSocket.frames.collect(::onStatsFrame) }
+        scope.launch { stateSocket.frames.collect { onStateFrame(it) } }
+        scope.launch { statsSocket.frames.collect { onStatsFrame(it) } }
         scope.launch { stateSocket.unauthorized.collect { if (it) _signedOut.value = true } }
         scope.launch {
             // A first paint before the socket's first frame.

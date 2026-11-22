@@ -306,8 +306,8 @@ fun FilesScreen(
                                         .onFailure { snack.showSnackbar(it.message ?: "Failed") }
                                 }
                                 "download" -> {
-                                    Downloads.toDownloads(context, s.client, drive.fileUrl(at, inline = false), e.name)
-                                    scope.launch { snack.showSnackbar("Downloading ${e.name}") }
+                                    val ok = Downloads.toDownloads(context, s.client, drive.fileUrl(at, inline = false), e.name)
+                                    scope.launch { snack.showSnackbar(if (ok) "Downloading ${e.name}" else "Couldn't start the download") }
                                 }
                                 "terminal" -> {
                                     val dir = if (e.dir) at else At(at.host, at.share, Drive.parent(at.path))

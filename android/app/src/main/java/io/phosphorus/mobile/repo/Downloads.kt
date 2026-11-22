@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
@@ -19,8 +20,12 @@ object Downloads {
     fun mime(name: String): String =
         MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
 
-    /** Saves to the phone's Downloads through the system's download manager, with the session cookie. */
-    fun toDownloads(context: Context, client: PhosClient, url: String, name: String) {
+    /**
+     * Saves to the phone's Downloads through the system's download manager, with the session
+     * cookie. Android 9 and older need a storage permission for Downloads, so there the file goes
+     * to the app's own downloads folder. False when the download manager refused it.
+     */
+    fun toDownloads(context: Context, client: PhosClient, url: String, name: String): Boolean = runCatching {
         val u = url.toHttpUrl()
         val cookie = client.session.loadForRequest(u).joinToString("; ") { "${it.name}=${it.value}" }
         val req = DownloadManager.Request(Uri.parse(url))
@@ -28,9 +33,12 @@ object Downloads {
             .setTitle(name)
             .setMimeType(mime(name))
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Phosphorus/" + name.replace('/', '_'))
+        val file = name.replace('/', '_')
+        if (Build.VERSION.SDK_INT >= 29) req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Phosphorus/$file")
+        else req.setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, file)
         context.getSystemService(DownloadManager::class.java).enqueue(req)
-    }
+        true
+    }.getOrDefault(false)
 
     /** Fetches into the app's cache and returns a content URI another app may read. */
     suspend fun toCache(context: Context, client: PhosClient, url: String, name: String): Uri = withContext(Dispatchers.IO) {

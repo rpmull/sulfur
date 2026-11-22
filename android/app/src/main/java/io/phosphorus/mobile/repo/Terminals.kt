@@ -57,6 +57,7 @@ class TermSession(
 
     fun start() { connect(resume = false) }
 
+    @Synchronized
     private fun connect(resume: Boolean) {
         val path = buildString {
             append(if (kind == "psh") "/api/psh" else "/api/term/$host")
@@ -67,6 +68,8 @@ class TermSession(
         _status.value = if (resume) Status.Reconnecting else Status.Connecting
         ws = client.socket(path, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                // Waits for connect() to have stored this socket, then ignores any it replaced.
+                if (synchronized(this@TermSession) { webSocket !== ws }) { webSocket.cancel(); return }
                 backoff = 1_000L
                 _status.value = Status.Live
                 webSocket.send(resizeFrame())
@@ -97,17 +100,19 @@ class TermSession(
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
-                ended(code)
+                ended(webSocket, code)
             }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = ended(code)
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = ended(webSocket, code)
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = ended(response?.code ?: -1)
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = ended(webSocket, response?.code ?: -1)
         })
     }
 
-    private fun ended(code: Int) {
-        if (_status.value == Status.Ended) return
+    @Synchronized
+    private fun ended(socket: WebSocket, code: Int) {
+        // onClosing and onClosed both land here, and an old socket may still report: act once, for the current one.
+        if (socket !== ws || _status.value == Status.Ended) return
         ws = null
         // 4000: the shell exited; 4001: another device took this session; 4xx on upgrade: refused.
         if (closedByUs || code == 4000 || code == 4001 || code in 400..499 || !opened) {
@@ -131,11 +136,12 @@ class TermSession(
         scope.launch {
             delay(backoff)
             backoff = (backoff * 2).coerceAtMost(10_000)
-            if (_status.value == Status.Reconnecting) connect(resume = true)
+            if (_status.value == Status.Reconnecting && ws == null) connect(resume = true)
         }
     }
 
     /** Reconnect at once, when the app comes back to the front with a dropped socket. */
+    @Synchronized
     fun poke() {
         if (_status.value == Status.Reconnecting && ws == null) { backoff = 1_000L; connect(resume = true) }
     }

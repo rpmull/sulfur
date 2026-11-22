@@ -21,7 +21,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Everything that belongs to one Phosphorus server; dropped and rebuilt when the server changes. */
-class ServerSession(context: Context, val base: HttpUrl, session: SessionStore) {
+class ServerSession(context: Context, val base: HttpUrl, session: SessionStore, diskCache: DiskCache) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val client = PhosClient(base, session)
     val mesh = Mesh(client, scope)
@@ -34,7 +34,7 @@ class ServerSession(context: Context, val base: HttpUrl, session: SessionStore) 
     val images: ImageLoader = ImageLoader.Builder(context)
         .okHttpClient(client.http)
         .memoryCache { MemoryCache.Builder(context).maxSizePercent(0.2).build() }
-        .diskCache { DiskCache.Builder().directory(context.cacheDir.resolve("images")).maxSizeBytes(128L * 1024 * 1024).build() }
+        .diskCache(diskCache)
         .crossfade(true)
         .build()
 
@@ -55,6 +55,7 @@ class ServerSession(context: Context, val base: HttpUrl, session: SessionStore) 
     fun close() {
         live = false
         mesh.stop(); chat.stop(); terminals.closeAll()
+        images.shutdown()
         scope.cancel()
     }
 }
@@ -64,18 +65,23 @@ class AppGraph(private val context: Context) {
     val sessionStore = SessionStore(context)
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /** One image disk cache for the app: two caches on one folder would corrupt it. */
+    private val diskCache: DiskCache by lazy {
+        DiskCache.Builder().directory(context.cacheDir.resolve("images")).maxSizeBytes(128L * 1024 * 1024).build()
+    }
+
     private val _server = MutableStateFlow<ServerSession?>(null)
     val server: StateFlow<ServerSession?> = _server.asStateFlow()
 
     fun open(base: HttpUrl): ServerSession {
         _server.value?.let { if (it.base == base) return it; it.close() }
-        return ServerSession(context, base, sessionStore).also { _server.value = it }
+        return ServerSession(context, base, sessionStore, diskCache).also { _server.value = it }
     }
 
     /** A new session for the same server, after a sign-out: the old one's sockets and scope are gone. */
     fun fresh(base: HttpUrl): ServerSession {
         _server.value?.close()
-        return ServerSession(context, base, sessionStore).also { _server.value = it }
+        return ServerSession(context, base, sessionStore, diskCache).also { _server.value = it }
     }
 
     suspend fun restore(): ServerSession? {

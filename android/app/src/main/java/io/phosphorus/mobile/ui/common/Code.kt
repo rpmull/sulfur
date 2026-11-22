@@ -24,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import io.phosphorus.mobile.ui.theme.MonoSmall
 import io.phosphorus.mobile.ui.theme.Phos
@@ -31,9 +33,16 @@ import io.phosphorus.mobile.ui.theme.Phos
 /** Source text with line numbers, scrolling sideways as one block so columns line up. */
 @Composable
 fun CodeView(text: String, modifier: Modifier = Modifier) {
-    val lines = remember(text) { text.replace("\r\n", "\n").split('\n') }
+    val lines = remember(text) { text.replace("\r\n", "\n").split('\n').map { it.replace("\t", "    ").ifEmpty { " " } } }
     val gutter = remember(lines.size) { lines.size.toString().length }
     val h = rememberScrollState()
+    // Every row as wide as the longest, so the shared sideways scroll has one extent.
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val width = remember(lines, measurer) {
+        val longest = lines.maxByOrNull { it.length } ?: " "
+        with(density) { measurer.measure(longest, MonoSmall, softWrap = false).size.width.toDp() } + 16.dp
+    }
     LazyColumn(modifier.fillMaxWidth().background(Phos.colors.bg)) {
         itemsIndexed(lines) { i, line ->
             Row {
@@ -43,7 +52,7 @@ fun CodeView(text: String, modifier: Modifier = Modifier) {
                     modifier = Modifier.padding(start = 8.dp, end = 10.dp),
                 )
                 Box(Modifier.horizontalScroll(h)) {
-                    Text(line.replace("\t", "    ").ifEmpty { " " }, style = MonoSmall, softWrap = false, modifier = Modifier.padding(end = 16.dp))
+                    Text(line, style = MonoSmall, softWrap = false, modifier = Modifier.width(width).padding(end = 16.dp))
                 }
             }
         }

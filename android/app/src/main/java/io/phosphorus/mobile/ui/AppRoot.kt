@@ -31,13 +31,14 @@ import io.phosphorus.mobile.Notifier
 import io.phosphorus.mobile.data.AppGraph
 import io.phosphorus.mobile.data.AppPrefs
 import io.phosphorus.mobile.data.ServerSession
-import io.phosphorus.mobile.net.PhosException
 import io.phosphorus.mobile.ui.onboarding.ConnectScreen
 import io.phosphorus.mobile.ui.onboarding.LoginScreen
 import io.phosphorus.mobile.ui.shell.MainShell
 import io.phosphorus.mobile.ui.theme.Phos
 import io.phosphorus.mobile.ui.theme.PhosphorusTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 
 val LocalServer = staticCompositionLocalOf<ServerSession?> { null }
@@ -54,6 +55,10 @@ private sealed interface Phase {
     data class Main(val server: ServerSession) : Phase
 }
 
+/** Offline with a saved session: open anyway, the sockets reconnect when they can. */
+private fun offline(graph: AppGraph, s: ServerSession): Phase =
+    if (graph.sessionStore.has("phosphorus-user")) Phase.Main(s) else Phase.Login(s, setup = false)
+
 @Composable
 fun AppRoot(graph: AppGraph, launch: MutableStateFlow<Launch?>, onReady: () -> Unit) {
     val prefs by graph.prefs.flow.collectAsState(initial = AppPrefs())
@@ -68,10 +73,17 @@ fun AppRoot(graph: AppGraph, launch: MutableStateFlow<Launch?>, onReady: () -> U
         phase = when {
             s == null -> Phase.Connect
             else -> try {
-                if (s.mesh.loadMe() != null) Phase.Main(s) else Phase.Login(s, setup = false)
-            } catch (e: PhosException) {
-                // Offline with a saved session: open anyway, the sockets reconnect when they can.
-                if (graph.sessionStore.has("phosphorus-user")) Phase.Main(s) else Phase.Login(s, setup = false)
+                // A slow or unreachable mesh shouldn't hold the splash: treat it as offline.
+                val me = withTimeoutOrNull(4_000) { s.mesh.loadMe() ?: false }
+                when (me) {
+                    false -> Phase.Login(s, setup = false)
+                    null -> offline(graph, s)
+                    else -> Phase.Main(s)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                offline(graph, s)
             }
         }
         onReady()

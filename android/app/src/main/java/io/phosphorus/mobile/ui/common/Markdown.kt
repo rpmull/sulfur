@@ -179,7 +179,7 @@ fun inline(src: String, colors: PhosColors): AnnotatedString = buildAnnotatedStr
                 val end = src.indexOf('`', i + 1)
                 if (end > i) {
                     withStyle(SpanStyle(fontFamily = Mono, background = colors.border.copy(alpha = 0.6f), color = colors.fg)) {
-                        append(" ").append(src.substring(i + 1, end)).append(" ")
+                        append("\u2009" + src.substring(i + 1, end) + "\u2009")
                     }
                     i = end + 1
                 } else { append(c); i++ }

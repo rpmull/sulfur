@@ -107,7 +107,7 @@ class Chat(private val client: PhosClient, private val scope: CoroutineScope, co
         joined = true
         readAt.value = readPrefs.all.mapNotNull { (k, v) -> (v as? Long)?.let { k to it } }.toMap()
         socket.start()
-        scope.launch { socket.frames.collect(::onFrame) }
+        scope.launch { socket.frames.collect { onFrame(it) } }
     }
 
     fun poke() = socket.poke()
