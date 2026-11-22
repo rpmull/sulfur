@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- https with the system's CAs, as Phosphorus's Let's Encrypt certificates need. Cleartext
+     stays allowed for a desktop reached by LAN or mesh address (http://10.0.0.5:...): the
+     connect screen warns before using it. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

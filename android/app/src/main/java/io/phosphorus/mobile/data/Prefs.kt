@@ -22,6 +22,7 @@ data class AppPrefs(
     val termFontSize: Float = 13f,
     val lastHost: String? = null,
     val notify: Boolean = true,
+    val stayConnected: Boolean = false,
 )
 
 class Prefs(private val context: Context) {
@@ -31,6 +32,7 @@ class Prefs(private val context: Context) {
         val termFont = floatPreferencesKey("term_font")
         val lastHost = stringPreferencesKey("last_host")
         val notify = booleanPreferencesKey("notify")
+        val stay = booleanPreferencesKey("stay_connected")
     }
 
     val flow: Flow<AppPrefs> = context.store.data.map { p ->
@@ -40,6 +42,7 @@ class Prefs(private val context: Context) {
             termFontSize = p[K.termFont] ?: 13f,
             lastHost = p[K.lastHost],
             notify = p[K.notify] ?: true,
+            stayConnected = p[K.stay] ?: false,
         )
     }
 
@@ -50,4 +53,5 @@ class Prefs(private val context: Context) {
     suspend fun setTermFont(size: Float) = context.store.edit { it[K.termFont] = size }
     suspend fun setLastHost(host: String) = context.store.edit { it[K.lastHost] = host }
     suspend fun setNotify(on: Boolean) = context.store.edit { it[K.notify] = on }
+    suspend fun setStayConnected(on: Boolean) = context.store.edit { it[K.stay] = on }
 }

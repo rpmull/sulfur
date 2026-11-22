@@ -37,6 +37,9 @@ Source Control's clone, fetch, pull and push over SSH (`user@host:/path/repo`) a
 password or key passphrase in Sulfur's input box when the server needs one, rather than
 failing; with nobody to ask, they fail at once.
 
+[`android/`](android/README.md) is a native Android app for a Phosphorus mesh: its terminals,
+git, drive, chat, device status and settings, signed in with the mesh's domain.
+
 [`docs/mesh-protocol.md`](docs/mesh-protocol.md) covers how meshes of different kinds are added and supported by Sulfur.
 
 
