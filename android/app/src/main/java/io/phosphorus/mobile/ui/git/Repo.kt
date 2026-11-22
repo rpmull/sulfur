@@ -57,7 +57,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -159,7 +161,9 @@ fun RepoScreen(nav: NavController, full: String) {
 @Composable
 private fun CodeTab(nav: NavController, full: String, d: RepoDetail, ref: String, bottom: androidx.compose.ui.unit.Dp, onRef: (String) -> Unit) {
     val s = server
-    val path = remember(full) { mutableStateListOf<String>() }
+    val path = rememberSaveable(full, saver = listSaver(save = { it.toList() }, restore = { it.toMutableStateList() })) {
+        mutableStateListOf<String>()
+    }
     val dir = path.joinToString("/")
     BackHandler(enabled = path.isNotEmpty()) { path.removeAt(path.lastIndex) }
     val tree = rememberLoad(full, ref, dir) { s.git.tree(full, ref, dir) }
@@ -332,7 +336,7 @@ private fun CommitsTab(nav: NavController, full: String, ref: String, bottom: an
         loading = true
         try {
             val p = s.git.commits(full, ref, page)
-            commits += p.commits
+            commits += p.commits.filter { n -> commits.none { it.sha == n.sha } }
             more = p.more
             error = null
         } catch (e: Exception) {
@@ -395,7 +399,7 @@ private fun ThreadsTab(nav: NavController, full: String, kind: String, bottom: a
         loading = true
         try {
             val p = s.git.threads(full, kind, state, page)
-            items += p.items; more = p.more; counts = p.open to p.closed; error = null
+            items += p.items.filter { n -> items.none { it.index == n.index } }; more = p.more; counts = p.open to p.closed; error = null
         } catch (e: Exception) { error = e } finally { loading = false }
     }
     LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = bottom), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -445,10 +449,9 @@ fun RunStatus(status: String, size: androidx.compose.ui.unit.Dp = 20.dp) {
 @Composable
 private fun ActionsTab(nav: NavController, full: String, bottom: androidx.compose.ui.unit.Dp) {
     val s = server
-    var tick by remember { mutableIntStateOf(0) }
-    val runs = rememberLoad(full, tick) { s.git.runs(full, 1) }
+    val runs = rememberLoad(full) { s.git.runs(full, 1) }
     val live = runs.value?.runs?.any { it.status == "running" || it.status == "queued" } == true
-    LaunchedEffect(live, tick) { if (live) { kotlinx.coroutines.delay(5_000); tick++ } }
+    LaunchedEffect(live, runs.loading) { if (live && !runs.loading) { kotlinx.coroutines.delay(5_000); runs.reload() } }
     val list = runs.value?.runs
     when {
         list == null && runs.error != null -> ErrorState(runs.error!!, runs::reload)

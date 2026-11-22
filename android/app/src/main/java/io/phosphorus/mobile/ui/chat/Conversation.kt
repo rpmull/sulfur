@@ -234,11 +234,7 @@ fun ConversationScreen(nav: NavController, conv: String) {
                     }
                 }
                 val away by remember { derivedStateOf { list.firstVisibleItemIndex > 4 } }
-                AnimatedVisibility(away, Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
-                    SmallFloatingActionButton(onClick = { scope.launch { list.animateScrollToItem(0) } }, containerColor = Phos.colors.card) {
-                        Icon(Icons.Outlined.KeyboardArrowDown, "Latest")
-                    }
-                }
+                JumpToLatest(away, Modifier.align(Alignment.BottomEnd).padding(16.dp)) { scope.launch { list.animateScrollToItem(0) } }
             }
             Composer(
                 draft = draft,
@@ -295,6 +291,16 @@ fun ConversationScreen(nav: NavController, conv: String) {
                 )
             }
             Spacer(Modifier.navigationBarsPadding().height(12.dp))
+        }
+    }
+}
+
+/** Outside any layout scope, so AnimatedVisibility resolves to the plain one. */
+@Composable
+private fun JumpToLatest(visible: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    AnimatedVisibility(visible, modifier) {
+        SmallFloatingActionButton(onClick = onClick, containerColor = Phos.colors.card) {
+            Icon(Icons.Outlined.KeyboardArrowDown, "Latest")
         }
     }
 }

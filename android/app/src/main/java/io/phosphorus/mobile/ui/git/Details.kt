@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -191,8 +192,7 @@ fun CommitScreen(nav: NavController, full: String, sha: String) {
 @Composable
 fun ThreadScreen(nav: NavController, full: String, kind: String, n: Int) {
     val s = server
-    var tick by remember { mutableIntStateOf(0) }
-    val thread = rememberLoad(full, kind, n, tick) { s.git.thread(full, kind, n) }
+    val thread = rememberLoad(full, kind, n) { s.git.thread(full, kind, n) }
     val t = thread.value
     var draft by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
@@ -205,7 +205,7 @@ fun ThreadScreen(nav: NavController, full: String, kind: String, n: Int) {
         sending = true
         scope.launch {
             runCatching { s.git.comment(full, n, draft.trim(), state) }
-                .onSuccess { draft = ""; tick++ }
+                .onSuccess { draft = ""; thread.reload() }
                 .onFailure { snack.showSnackbar(it.message ?: "Couldn't post") }
             sending = false
         }
@@ -309,7 +309,7 @@ fun ThreadScreen(nav: NavController, full: String, kind: String, n: Int) {
                         }
                     }
                     item { NoteCard(t.author, t.person, t.created, t.body.ifBlank { "_No description._" }) }
-                    items(t.notes, key = { it.id.toString() + it.kind + it.at }) { note -> NoteItem(note) }
+                    itemsIndexed(t.notes, key = { i, note -> if (note.id != 0L) "n${note.id}" else "e$i" }) { _, note -> NoteItem(note) }
                     if (t.can.comment) item {
                         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                             TextButton(onClick = { send(if (t.state == "open") "closed" else "open") }, enabled = !sending) {
@@ -347,7 +347,7 @@ fun ThreadScreen(nav: NavController, full: String, kind: String, n: Int) {
                     merging = false
                     scope.launch {
                         runCatching { s.git.merge(full, n, deleteBranch) }
-                            .onSuccess { snack.showSnackbar("Merged"); tick++ }
+                            .onSuccess { thread.reload(); snack.showSnackbar("Merged") }
                             .onFailure { snack.showSnackbar(it.message ?: "Couldn't merge") }
                     }
                 }) { Text("Merge") }
@@ -401,13 +401,12 @@ private fun NoteItem(n: Note) {
 fun RunScreen(nav: NavController, full: String, id: Long) {
     val s = server
     var job by remember { mutableStateOf<Long?>(null) }
-    var tick by remember { mutableIntStateOf(0) }
-    val run = rememberLoad(full, id, job, tick) { s.git.run(full, id, job) }
+    val run = rememberLoad(full, id, job) { s.git.run(full, id, job) }
     val r = run.value
     val live = r?.run?.status == "running" || r?.run?.status == "queued"
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
-    LaunchedEffect(live, tick) { if (live) { delay(3_000); tick++ } }
+    LaunchedEffect(live, run.loading) { if (live && !run.loading) { delay(3_000); run.reload() } }
     LaunchedEffect(r?.jobs) { if (job == null) r?.jobs?.let { js -> (js.firstOrNull { it.status == "failure" } ?: js.firstOrNull())?.let { job = it.id } } }
 
     Screen(
@@ -417,9 +416,9 @@ fun RunScreen(nav: NavController, full: String, id: Long) {
         snackbar = snack,
         actions = {
             if (r?.can_write == true) {
-                if (live) IconButton(onClick = { scope.launch { runCatching { s.git.cancel(full, id) }.onFailure { snack.showSnackbar(it.message ?: "") }; tick++ } }) {
+                if (live) IconButton(onClick = { scope.launch { runCatching { s.git.cancel(full, id) }.onFailure { snack.showSnackbar(it.message ?: "") }; run.reload() } }) {
                     Icon(Icons.Outlined.StopCircle, "Cancel")
-                } else IconButton(onClick = { scope.launch { runCatching { s.git.rerun(full, id) }.onFailure { snack.showSnackbar(it.message ?: "") }; tick++ } }) {
+                } else IconButton(onClick = { scope.launch { runCatching { s.git.rerun(full, id) }.onFailure { snack.showSnackbar(it.message ?: "") }; run.reload() } }) {
                     Icon(Icons.Outlined.Replay, "Run again")
                 }
             }

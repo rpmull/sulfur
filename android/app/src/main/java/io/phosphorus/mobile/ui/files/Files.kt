@@ -88,6 +88,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import io.phosphorus.mobile.net.At
@@ -112,11 +114,17 @@ import io.phosphorus.mobile.ui.theme.Phos
 import kotlinx.coroutines.launch
 
 /** Where the browser is: the places overview, a folder, or one of Drive's lists. */
-private sealed interface Loc {
+internal sealed interface Loc {
     data object Places : Loc
     data class Folder(val at: At, val title: String) : Loc
     data class List(val kind: String) : Loc // recent, starred, shared
     data class Search(val q: String) : Loc
+}
+
+/** The folder stack, kept with the back-stack entry so a preview or another tab doesn't reset it. */
+internal class FilesNav : ViewModel() {
+    val stack = mutableStateListOf<Loc>(Loc.Places)
+    var applied: Triple<String?, String?, String?>? = null
 }
 
 fun fileIcon(name: String, dir: Boolean): Pair<ImageVector, Color?> {
@@ -148,7 +156,8 @@ fun FilesScreen(
 ) {
     val s = server
     val drive = s.drive
-    val stack = remember { mutableStateListOf<Loc>(Loc.Places) }
+    val filesNav: FilesNav = viewModel()
+    val stack = filesNav.stack
     val snack = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -161,6 +170,9 @@ fun FilesScreen(
     val meDrive = rememberLoad(s) { drive.me() }
 
     LaunchedEffect(startHost, startShare, startPath) {
+        val start = Triple(startHost, startShare, startPath)
+        if (filesNav.applied == start) return@LaunchedEffect
+        filesNav.applied = start
         if (startHost != null) {
             if (startShare.isNullOrEmpty()) stack.add(Loc.Folder(At(startHost, "", ""), startHost))
             else stack.add(Loc.Folder(At(startHost, startShare, startPath.orEmpty()), startPath?.substringAfterLast('/')?.ifEmpty { null } ?: startHost))
@@ -185,12 +197,11 @@ fun FilesScreen(
                     drive.upload(context.contentResolver, uri, At(into.host, into.share, Drive.join(into.path, name)), size) { done, total ->
                         up.progress = if (total > 0) done.toFloat() / total else 1f
                     }
+                    uploads.remove(up); refresh++
                     snack.showSnackbar("Uploaded $name")
                 } catch (e: Exception) {
+                    uploads.remove(up); refresh++
                     snack.showSnackbar("Couldn't upload $name: ${e.message}")
-                } finally {
-                    uploads.remove(up)
-                    refresh++
                 }
             }
         }
@@ -284,14 +295,15 @@ fun FilesScreen(
                             when (action) {
                                 "rename" -> renaming = at to e.name
                                 "star" -> scope.launch {
-                                    runCatching { drive.star(at, !e.starred, e.dir) }.onFailure { snack.showSnackbar(it.message ?: "Failed") }
+                                    val r = runCatching { drive.star(at, !e.starred, e.dir) }
                                     refresh++
+                                    r.onFailure { snack.showSnackbar(it.message ?: "Failed") }
                                 }
                                 "trash" -> scope.launch {
-                                    runCatching { drive.trash(listOf(at)) }
-                                        .onSuccess { snack.showSnackbar("Moved ${e.name} to the trash") }
-                                        .onFailure { snack.showSnackbar(it.message ?: "Failed") }
+                                    val r = runCatching { drive.trash(listOf(at)) }
                                     refresh++
+                                    r.onSuccess { snack.showSnackbar("Moved ${e.name} to the trash") }
+                                        .onFailure { snack.showSnackbar(it.message ?: "Failed") }
                                 }
                                 "download" -> {
                                     Downloads.toDownloads(context, s.client, drive.fileUrl(at, inline = false), e.name)
@@ -315,9 +327,9 @@ fun FilesScreen(
         NameDialog("New folder", "", "Create", onDismiss = { newFolder = false }) { name ->
             newFolder = false
             scope.launch {
-                runCatching { drive.mkdir(At(folder.at.host, folder.at.share, Drive.join(folder.at.path, name))) }
-                    .onFailure { snack.showSnackbar(it.message ?: "Failed") }
+                val r = runCatching { drive.mkdir(At(folder.at.host, folder.at.share, Drive.join(folder.at.path, name))) }
                 refresh++
+                r.onFailure { snack.showSnackbar(it.message ?: "Failed") }
             }
         }
     }
@@ -325,8 +337,9 @@ fun FilesScreen(
         NameDialog("Rename", name, "Rename", onDismiss = { renaming = null }) { newName ->
             renaming = null
             scope.launch {
-                runCatching { drive.rename(at, newName) }.onFailure { snack.showSnackbar(it.message ?: "Failed") }
+                val r = runCatching { drive.rename(at, newName) }
                 refresh++
+                r.onFailure { snack.showSnackbar(it.message ?: "Failed") }
             }
         }
     }
@@ -521,7 +534,8 @@ private fun FolderView(
     onAction: (String, DriveEntry) -> Unit,
 ) {
     val s = server
-    val listing = rememberLoad(at, refresh) { s.drive.list(at) }
+    val listing = rememberLoad(at) { s.drive.list(at) }
+    LaunchedEffect(refresh) { if (refresh != 0) listing.reload() }
     val l = listing.value
     when {
         l == null && listing.error != null -> ErrorState(listing.error!!, listing::reload)

@@ -13,6 +13,9 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -104,9 +107,8 @@ class TerminalBridge(
     @JavascriptInterface fun ready(cols: Int, rows: Int) {
         main.post {
             session.resize(cols, rows)
-            // Through the batch, so the replay lands before anything newer.
-            val replay = session.attach(sink)
-            if (replay.isNotEmpty()) output(replay)
+            // The session hands over its replay and the live stream under one lock, in order.
+            session.attach(sink)
         }
     }
 
@@ -132,9 +134,14 @@ fun TerminalView(
     modifier: Modifier = Modifier,
 ) {
     val theme = remember(colors) { xtermTheme(colors) }
+    val curFont by rememberUpdatedState(fontSize)
+    val curTheme by rememberUpdatedState(theme)
+    val curOnFont by rememberUpdatedState(onFont)
+    val curOnMods by rememberUpdatedState(onModsUsed)
     val bridge = remember(session) {
-        TerminalBridge(session, { fontSize }, { theme }, onFont, onModsUsed)
+        TerminalBridge(session, { curFont }, { curTheme }, { curOnFont(it) }, { curOnMods() })
     }
+    LaunchedEffect(fontSize) { handle.font(fontSize) }
     AndroidView(
         modifier = modifier,
         factory = { ctx ->

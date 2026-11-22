@@ -121,7 +121,7 @@ fun ReposScreen(nav: NavController) {
                         list == null -> Loading()
                         list.isEmpty() -> Empty(Icons.Outlined.AccountTree, "Nothing open for you", "Issues and pull requests you opened, are assigned or mentioned in show here.")
                         else -> LazyColumn(contentPadding = bottom, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            items(list, key = { (it.repo ?: "") + it.index }) { t ->
+                            items(list, key = { "${it.repo}#${it.index}" }) { t ->
                                 ThreadCard(t, showRepo = true) { t.repo?.let { r -> nav.navigate(Routes.thread(r, kind, t.index)) } }
                             }
                         }

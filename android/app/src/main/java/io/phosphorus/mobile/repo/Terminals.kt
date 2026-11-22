@@ -141,9 +141,10 @@ class TermSession(
     }
 
     /** Hands everything drawn so far to a new view and streams the rest to [to], with no gap between. */
-    fun attach(to: (ByteArray) -> Unit): ByteArray = synchronized(replay) {
+    fun attach(to: (ByteArray) -> Unit) = synchronized(replay) {
+        val drawn = replay.toByteArray()
+        if (drawn.isNotEmpty()) to(drawn)
         sink = to
-        replay.toByteArray()
     }
 
     fun detach(from: (ByteArray) -> Unit) = synchronized(replay) { if (sink === from) sink = null }
