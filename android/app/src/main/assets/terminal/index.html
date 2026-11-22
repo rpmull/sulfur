@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content">
+<link rel="stylesheet" href="xterm.css">
+<style>
+  html, body { margin: 0; height: 100%; background: var(--bg, #121416); overflow: hidden; }
+  #term { position: absolute; inset: 6px 4px 2px 8px; }
+  .xterm .xterm-viewport { scrollbar-width: none; }
+  .xterm .xterm-viewport::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script>
+// The page only draws: Kotlin (window.Phos) owns the socket. Output arrives base64 through
+// phosWrite, keystrokes and size changes go back through Phos.input / Phos.resize.
+(function () {
+  const bridge = window.Phos;
+  const opts = JSON.parse(bridge.options());
+  document.documentElement.style.setProperty('--bg', opts.theme.background);
+  const term = new Terminal({
+    fontFamily: '"JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono", "Droid Sans Mono", monospace',
+    fontSize: opts.fontSize,
+    lineHeight: 1.12,
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    scrollback: 5000,
+    allowProposedApi: true,
+    macOptionIsMeta: true,
+    theme: opts.theme,
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById('term'));
+
+  let lastCols = 0, lastRows = 0;
+  function refit() {
+    try { fit.fit(); } catch (e) {}
+    if (term.cols !== lastCols || term.rows !== lastRows) {
+      lastCols = term.cols; lastRows = term.rows;
+      bridge.resize(term.cols, term.rows);
+    }
+  }
+  new ResizeObserver(refit).observe(document.getElementById('term'));
+  window.addEventListener('resize', refit);
+
+  // Modifiers held on the app's key bar apply to the next key typed on the soft keyboard.
+  let mods = { ctrl: false, alt: false };
+  term.onData(function (d) {
+    if (mods.ctrl && d.length === 1) {
+      const c = d.toUpperCase().charCodeAt(0);
+      if (c >= 64 && c <= 95) d = String.fromCharCode(c - 64);
+      else if (d === ' ') d = '\x00';
+      else if (d === '?') d = '\x7f';
+    }
+    if (mods.alt) d = '\x1b' + d;
+    if (mods.ctrl || mods.alt) { mods = { ctrl: false, alt: false }; bridge.modsUsed(); }
+    bridge.input(d);
+  });
+  term.onTitleChange(function (t) { bridge.title(t || ''); });
+  term.onBell(function () { bridge.bell(); });
+
+  // Pinch to zoom the font, as phone terminals do.
+  let pinch = null;
+  document.addEventListener('touchstart', function (e) {
+    if (e.touches.length === 2) pinch = { d: dist(e), size: term.options.fontSize };
+  }, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    if (pinch && e.touches.length === 2) {
+      const size = Math.max(7, Math.min(28, Math.round(pinch.size * dist(e) / pinch.d)));
+      if (size !== term.options.fontSize) { term.options.fontSize = size; refit(); }
+    }
+  }, { passive: true });
+  document.addEventListener('touchend', function (e) {
+    if (pinch && e.touches.length < 2) { bridge.fontSize(term.options.fontSize); pinch = null; }
+  }, { passive: true });
+  function dist(e) {
+    const a = e.touches[0], b = e.touches[1];
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) || 1;
+  }
+
+  window.phosWrite = function (b64) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    term.write(bytes);
+  };
+  window.phosText = function (s) { term.write(s); };
+  window.phosMods = function (ctrl, alt) { mods = { ctrl: ctrl, alt: alt }; };
+  window.phosFocus = function () { term.focus(); };
+  window.phosReset = function () { term.reset(); };
+  window.phosFont = function (size) { term.options.fontSize = size; refit(); };
+  window.phosTheme = function (json) {
+    const t = JSON.parse(json);
+    term.options.theme = t;
+    document.documentElement.style.setProperty('--bg', t.background);
+  };
+  window.phosPaste = function (s) { term.paste(s); };
+  window.phosSelection = function () { return term.getSelection(); };
+  window.phosSize = function () { return JSON.stringify({ cols: term.cols, rows: term.rows }); };
+
+  refit();
+  term.focus();
+  bridge.ready(term.cols, term.rows);
+})();
+</script>
+</body>
+</html>
